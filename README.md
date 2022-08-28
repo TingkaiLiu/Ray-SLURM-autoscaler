@@ -22,7 +22,7 @@ Prerequisite: Ray is needed to be installed.
 Download the package or run 
 
 `
-git clone https://github.com/TingkaiLiu/Ray-SLURM-autoscaler.git
+    git clone https://github.com/TingkaiLiu/Ray-SLURM-autoscaler.git
 `
 
 A deployment script is provided. Before running the script, several fields are needed to be filled in deploy.py:
@@ -40,9 +40,8 @@ A deployment script is provided. Before running the script, several fields are n
 After filling the fields, run 
 
 `
-cd Ray-SLURM-autoscaler
-
-python3 deploy.py
+    cd Ray-SLURM-autoscaler
+    python3 deploy.py
 `
 
 After deployed successfully, an autoscaler config yaml (ray-slurm.yaml) will be generated. User needs to further fill the config ymal for specific configuration, just like using Ray on supported Cloud providers. Notice that SLURM-based autoscaler config has some special fields such as "head ip" and "additional SLURM commands". Please see the comments in the generated yaml file for detail. 
@@ -50,7 +49,7 @@ After deployed successfully, an autoscaler config yaml (ray-slurm.yaml) will be 
 After the autosclaer config is filled, a Ray cluster with autoscaling capability can be started by the cluster launcher 
 
 `
-ray up ray-slurm.yaml --no-config-cache
+    ray up ray-slurm.yaml --no-config-cache
 `
 
 ## Manual deployment

@@ -1,8 +1,8 @@
 
----
-author: Tingkai Liu (tingkai2@illinois.edu)
-date: Aug 26, 2022
----
+
+> Author: Tingkai Liu (tingkai2@illinois.edu)
+> Date: Aug 26, 2022
+
 
 # Ray-SLURM-autoscaler
 

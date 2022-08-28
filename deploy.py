@@ -39,7 +39,7 @@ if __name__ == "__main__":
     TEMPLATE_PATH = RAY_SLURM_PATH + "/template"
     
     if not os.path.exists(RAY_PATH):
-        print("Ray path is not vaild")
+        print("Ray path is not vaild. Please fill the fields in deploy.py correctly")
         exit(0)
 
     if os.path.exists(RAY_SLURM_PATH):
@@ -74,7 +74,7 @@ if __name__ == "__main__":
         template = f.read()
     template = template.replace("[_DEPLOY_HEAD_CPUS_]", HEAD_NODE_CPUS)
     template = template.replace("[_DEPLOY_HEAD_GPUS_]", HEAD_NODE_GPUS)
-    with open(TEMPLATE_PATH + "/head.sh") as f:
+    with open(TEMPLATE_PATH + "/head.sh", "w") as f:
         f.write(template)
     
     with open("slurm/template/head.slurm", "r") as f:
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     template = template.replace("[_DEPLOY_HEAD_CPUS_]", HEAD_NODE_CPUS)
     template = template.replace("[_DEPLOY_HEAD_GPUS_]", HEAD_NODE_GPUS)
     template = template.replace("[_DEPLOY_SLURM_JOB_TIME_]", MAX_SLURM_JOB_TIME)
-    with open(TEMPLATE_PATH + "/head.slurm") as f:
+    with open(TEMPLATE_PATH + "/head.slurm", "w") as f:
         f.write(template)
     
     with open("slurm/template/worker.slurm", "r") as f:
@@ -90,11 +90,11 @@ if __name__ == "__main__":
     template = template.replace("[_DEPLOY_WORKER_CPUS_]", WORKER_NODE_CPUS)
     template = template.replace("[_DEPLOY_WORKER_GPUS_]", WORKER_NODE_GPUS)
     template = template.replace("[_DEPLOY_SLURM_JOB_TIME_]", MAX_SLURM_JOB_TIME)
-    with open(TEMPLATE_PATH + "/worker.slurm") as f:
+    with open(TEMPLATE_PATH + "/worker.slurm", "w") as f:
         f.write(template)
 
     # Fill and generate autoscaler config
-    with open("slurm/exmaple-full.yaml") as f:
+    with open("slurm/example-full.yaml", "r") as f:
         template = f.read()
     template = template.replace("[_DEPLOY_RAY_PATH_]", RAY_PATH)
     template = template.replace("[_DEPLOY_RAY_TEMPLATE_PATH_]", TEMPLATE_PATH)

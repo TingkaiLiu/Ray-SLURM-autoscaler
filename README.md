@@ -10,7 +10,7 @@ This repo includes the SLURM NodeProvider implementation for Ray. With this side
 
 This package provides supports for two scenarios:
 
-- The head node of the Ray cluster is outside of SLURM (i.e. on the login node of the cluster). This is useful when users want to connect to the Ray cluster remotely (using Ray client, for example), while the compute nodes of the cluster are not directly reachable from outside of the cluster. In such case, it is recommended to set the CPU and GPU resource of the Ray head node to be 0, since login node is not supposed to be used for computation. 
+- The head node of the Ray cluster is outside of SLURM (i.e. on the login node of the cluster). This is useful when users want to connect to the Ray cluster remotely (using Ray client, for example), while the compute nodes of the cluster are not directly reachable from outside of the cluster. In such cases, it is recommended to set the CPU and GPU resource of the Ray head node to be 0, since the login node is not supposed to be used for computation. 
 
 - The head node of the Ray cluster is under SLURM. This is useful when users are only using the Ray cluster when logging into the compute cluster, and want to avoid conflict with other users on the same cluster.  
 
@@ -44,9 +44,9 @@ After filling the fields, run
     python3 deploy.py
 `
 
-After deployed successfully, an autoscaler config yaml (ray-slurm.yaml) will be generated. User needs to further fill the config ymal for specific configuration, just like using Ray on supported Cloud providers. Notice that SLURM-based autoscaler config has some special fields such as "head ip" and "additional SLURM commands". Please see the comments in the generated yaml file for detail. 
+After deployed successfully, an autoscaler config yaml (ray-slurm.yaml) will be generated. User needs to further fill ray-slurm.yaml for specific configuration, just like using Ray on supported Cloud providers. Notice that SLURM-based autoscaler config has some special fields such as "head ip" and "additional SLURM commands". Please see the comments in the generated yaml file for detail. 
 
-After the autosclaer config is filled, a Ray cluster with autoscaling capability can be started by the cluster launcher 
+After ray-slurm.yaml is filled, a Ray cluster with autoscaling capability can be started by the cluster launcher 
 
 `
     ray up ray-slurm.yaml --no-config-cache
@@ -61,11 +61,11 @@ Manual deployment is also possible. To do this, all the things done by the deplo
 - Copy the code and template script to Ray library path. 
 - Fill the path name in autoscaler config yaml
 
-TL;DR: Fill all the "Macros" with prefix "\_DEPLOY\_"
+TL;DR: Fill all the "Macros" with prefix "\_DEPLOY\_" and copy all files into ray package.
 
 # Notes
-The original Ray autoscaler assumes each "node" in the Ray cluster is a VM-like machine that can be SSH-ed into to run setup command, and those machines doesn't share a file system. As a result, the autoscaler treat "node allocation" and "node setup" as two steps,using two different thread to do the job, and requires ways to transmit files across different nodes (such as rsync). 
+The original Ray autoscaler assumes each "node" in the Ray cluster is a VM-like machine that can be SSH-ed into to run setup command, and those machines doesn't share a file system. As a result, the autoscaler treats "node allocation" and "node setup" as two steps,using two different thread to do the job, and requires ways to transmit files across different nodes (such as rsync). 
 
 However, this model doesn't fit the SLURM cluster model. Each "node" in a SLURM cluster is a slurm job, in which "node allocation" and "node setup" are done at the same time. Furthermore, the nodes in the SLURM clusters usually share a file system and don't require inter-node file transmission. 
 
-As a result, some hacking is performed in this site package. All the node setup are done when the node is created (when submitting the SLURM) batch. The command runner (for setting up the nodes after node creation) is implemented to be empty, and the inter-node file transmission is implemented as local copying. For details about the autoscaler system structure and hacking, see this development guide: https://github.com/TingkaiLiu/ray/blob/NodeProvider_doc/doc/source/cluster/node-provider.rst
+As a result, some hacking is performed in this site package. All the node setup are done when the node is created (when submitting the SLURM batch). The command runner (for setting up the nodes after node creation) is implemented to be empty, and the inter-node file transmission is implemented as local copying. For details about the autoscaler system structure and hacking, see this development guide: https://github.com/TingkaiLiu/ray/blob/NodeProvider_doc/doc/source/cluster/node-provider.rst

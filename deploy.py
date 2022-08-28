@@ -12,12 +12,10 @@ import os
 RAY_PATH = "/Users/<user_name>/opt/anaconda3/envs/<env_name>/lib/python3.9/site-packages/ray"
 
 # The compute node name to IP mapping
-SLURM_IP_LOOKUP = """
-    {
-        "compute1" : "192.168.1.1",
-        "compute2" : "192.168.1.2",
-    } 
-"""
+SLURM_IP_LOOKUP = """ {
+    "compute1" : "192.168.1.1",
+    "compute2" : "192.168.1.2",
+} """
 
 MAX_SLURM_JOB_TIME = "01:30:00"
 
@@ -43,7 +41,7 @@ if __name__ == "__main__":
         exit(0)
 
     if os.path.exists(RAY_SLURM_PATH):
-        ans = input("Ray-SLURM packages already exist. Overwrite? [y/n]")
+        ans = input("Ray-SLURM packages already exist. Overwrite? [y/n]: ")
         if ans != 'y':
             print("Exited")
             exit(0)

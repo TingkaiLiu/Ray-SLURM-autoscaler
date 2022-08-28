@@ -29,9 +29,9 @@ A deployment script is provided. Before running the script, several fields are n
 
 - The path of Ray library, for example:
 
-```
+`
 /Users/<user_name>/opt/anaconda3/envs/<env_name>/lib/python3.9/site-packages/ray/
-```
+`
 
 - The compute node name and IP address of the cluster under SLURM
 - The size (number of CPUs) of one compute node

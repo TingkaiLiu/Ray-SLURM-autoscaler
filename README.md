@@ -21,17 +21,17 @@ Prerequisite: Ray is needed to be installed.
 
 Download the package or run 
 
-`
+```
     git clone https://github.com/TingkaiLiu/Ray-SLURM-autoscaler.git
-`
+```
 
 A deployment script is provided. Before running the script, several fields are needed to be filled in deploy.py:
 
 - The path of Ray library, for example:
 
-`
+```
 /Users/<user_name>/opt/anaconda3/envs/<env_name>/lib/python3.9/site-packages/ray/
-`
+```
 
 - The compute node name and IP address of the cluster under SLURM
 - The size (number of CPUs) of one compute node
@@ -39,18 +39,18 @@ A deployment script is provided. Before running the script, several fields are n
 
 After filling the fields, run 
 
-`
+```
     cd Ray-SLURM-autoscaler
     python3 deploy.py
-`
+```
 
 After deployed successfully, an autoscaler config yaml (ray-slurm.yaml) will be generated. User needs to further fill ray-slurm.yaml for specific configuration, just like using Ray on supported Cloud providers. Notice that SLURM-based autoscaler config has some special fields such as "head ip" and "additional SLURM commands". Please see the comments in the generated yaml file for detail. 
 
 After ray-slurm.yaml is filled, a Ray cluster with autoscaling capability can be started by the cluster launcher 
 
-`
+```
     ray up ray-slurm.yaml --no-config-cache
-`
+```
 
 ## Manual deployment
 

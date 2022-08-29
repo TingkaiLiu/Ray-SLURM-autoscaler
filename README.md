@@ -52,6 +52,8 @@ After ray-slurm.yaml is filled, a Ray cluster with autoscaling capability can be
     ray up ray-slurm.yaml --no-config-cache
 ```
 
+If you are deploying it as a system admin, after deployment, you can provide only ray-slurm.yaml for users to launch their custom Ray cluster. 
+
 ## Manual deployment
 
 Manual deployment is also possible. To do this, all the things done by the deployment script are needed to be performed. The deployment script does the following things:

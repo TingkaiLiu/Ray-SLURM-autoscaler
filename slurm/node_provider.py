@@ -26,8 +26,8 @@ from ray.autoscaler._private.slurm.slurm_commands import (
     SLURM_JOB_NOT_EXIST
 )
 
-from threading import RLock
-from filelock import FileLock
+from threading import RLock # reentrant lock
+from filelock import FileLock # reentrant (recursive) lock
 
 from ray.autoscaler._private.cli_logger import cli_logger
 
@@ -320,38 +320,46 @@ class NodeProvider:
         
         if under_slurm:
             if is_head_node: # head node under slurm
-                node_id = slurm_launch_head(
-                    self.template_folder,
-                    self.temp_folder, 
-                    current_conf["head_node_name"], 
-                    self.gcs_port,
-                    self.ray_client_port,
-                    self.dashboard_port,
-                    parsed_init_command,
-                    parsed_add_slurm_command
-                )
-
-                # Store pending info: will be updated by non_terminate_node
+                
                 node_info = {}
                 node_info["state"] = NODE_STATE_PENDING
                 node_info["tags"] = tags
-                self.state.put(node_id, node_info)
+
+                with self.state.lock:
+                    with self.state.file_lock:
+                        node_id = slurm_launch_head(
+                            self.template_folder,
+                            self.temp_folder, 
+                            current_conf["head_node_name"], 
+                            self.gcs_port,
+                            self.ray_client_port,
+                            self.dashboard_port,
+                            parsed_init_command,
+                            parsed_add_slurm_command
+                        )
+
+                        # Store pending info: will be updated by non_terminate_node
+                        self.state.put(node_id, node_info)
 
             else: # worker node under slurm
                 for _ in range(count):
-                    node_id = slurm_launch_worker(
-                        self.template_folder,
-                        self.temp_folder,
-                        self.head_ip+":"+self.gcs_port,
-                        parsed_init_command,
-                        parsed_add_slurm_command
-                    )
-
-                    # Store pending info: will be updated by non_terminate_node
+                    
                     node_info = {}
                     node_info["state"] = NODE_STATE_PENDING
                     node_info["tags"] = tags
-                    self.state.put(node_id, node_info)
+                    
+                    with self.state.lock:
+                        with self.state.file_lock:
+                            node_id = slurm_launch_worker(
+                                self.template_folder,
+                                self.temp_folder,
+                                self.head_ip+":"+self.gcs_port,
+                                parsed_init_command,
+                                parsed_add_slurm_command
+                            )
+
+                            # Store pending info: will be updated by non_terminate_node
+                            self.state.put(node_id, node_info)
 
         else: # not under slurm
             if is_head_node: 
@@ -370,12 +378,15 @@ class NodeProvider:
                 f.write(template)
                 f.close()
 
-                subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
-
                 node_info = {}
                 node_info["state"] = NODE_STATE_RUNNING
                 node_info["tags"] = tags
-                self.state.put(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
+
+                with self.state.lock:
+                    with self.state.file_lock:
+                        subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
+                        
+                        self.state.put(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
 
                 self._internal_ip_cache[self.head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
 
@@ -464,12 +475,14 @@ class NodeProvider:
             cli_logger.warning("Trying to terminate non-exsiting node\n")
             return
         
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
-            subprocess.run(["bash", "-l", self.temp_folder+"/end_head.sh"]) # TODO: check error
-        else:
-            slurm_cancel_job(node_id)
-        
-        self.state.delete(node_id)
+        with self.state.lock:
+            with self.state.file_lock:
+                if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+                    subprocess.run(["bash", "-l", self.temp_folder+"/end_head.sh"]) # TODO: check error
+                else:
+                    slurm_cancel_job(node_id)
+                
+                self.state.delete(node_id)
 
         # if self.launched_nodes[node_id][INFO_IP_INDEX] in self._internal_ip_cache:
         #     self._internal_ip_cache.pop(self.launched_nodes[node_id][INFO_IP_INDEX])

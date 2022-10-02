@@ -1,7 +1,7 @@
 #!/bin/bash -l
 
-#SBATCH --cpus-per-task="[_DEPLOY_HEAD_CPUS_]"
-#SBATCH --gpus-per-task="[_DEPLOY_HEAD_GPUS_]"
+#SBATCH --cpus-per-task=[_DEPLOY_HEAD_CPUS_]
+#SBATCH --gpus-per-task=[_DEPLOY_HEAD_GPUS_]
 
 #SBATCH --nodes=1
 #SBATCH --exclusive

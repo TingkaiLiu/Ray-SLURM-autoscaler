@@ -163,6 +163,18 @@ class SlurmClusterState:
                         "Writing cluster state: {}".format(list(cluster_state["meta"]))
                     )
                     f.write(json.dumps(cluster_state))
+    
+    def delete_head_info(self):
+        with self.lock:
+            with self.file_lock:
+                cluster_state = self._get()
+                cluster_state["meta"] = {}
+                with open(self.save_path, "w") as f:
+                    logger.info(
+                        "ClusterState: "
+                        "Writing cluster state: {}".format(list(cluster_state["meta"]))
+                    )
+                    f.write(json.dumps(cluster_state))
 
     def get_nodes(self):
         """Return all the nodes info on file 
@@ -554,6 +566,7 @@ class NodeProvider:
         """
 
         workers = self.state.get_nodes()
+        head_id = self.state.get_head_id()
 
         if node_id not in workers:
             cli_logger.warning("Trying to terminate non-exsiting node\n")
@@ -567,6 +580,9 @@ class NodeProvider:
                     slurm_cancel_job(node_id)
                 
                 self.state.delete_node(node_id)
+
+                if node_id == head_id:
+                    self.state.delete_head_info()
 
         # if self.launched_nodes[node_id][INFO_IP_INDEX] in self._internal_ip_cache:
         #     self._internal_ip_cache.pop(self.launched_nodes[node_id][INFO_IP_INDEX])

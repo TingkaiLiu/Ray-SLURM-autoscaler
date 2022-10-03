@@ -64,6 +64,19 @@ class SlurmClusterState:
     """Maintain additional information on file for slurm cluster
     (modified from local.ClusterState)
 
+    File format:
+    {
+        "meta" : {
+            "head_ip" : <head_ip>
+        }
+        "nodes" : {
+            <id> : {
+                "state" : <state>,
+                "tags" : <tag>
+            }
+        }
+    }
+
     Information needed for each node:
     1. Slurm job id (major key)
     2. State: running, pending, terminated (should just be deleted)
@@ -83,29 +96,65 @@ class SlurmClusterState:
         with self.lock:
             with self.file_lock:
                 if os.path.exists(self.save_path): # Reload the cluser states
-                    workers = json.loads(open(self.save_path).read())
+                    cluster_state = json.loads(open(self.save_path).read())
+                    
+                    # Sanity check for file that doesn't fit the format
+                    if ("meta" not in cluster_state) or ("nodes" not in cluster_state):
+                        cluster_state = {"meta":{}, "nodes":{}}
+
                 else:
-                    workers = {}
+                    cluster_state = {"meta":{}, "nodes":{}}
                     with open(self.save_path, "w") as f:
                         logger.debug(
-                            "ClusterState: Writing cluster state: {}".format(workers)
+                            "ClusterState: Writing cluster state: {}".format(cluster_state["nodes"])
                         )
-                        f.write(json.dumps(workers))
+                        f.write(json.dumps(cluster_state))
 
-                logger.info(
-                    "ClusterState: Loaded cluster state: {}".format(list(workers))
-                )
+        logger.info(
+            "ClusterState: Loaded cluster state: {}".format(list(cluster_state["nodes"]))
+        )
 
-    def get(self):
-        """Return all the node info on file.
+    def _get(self):
+        """Return all the whole cluster info on file.
         """
         
         with self.lock:
             with self.file_lock:
-                workers = json.loads(open(self.save_path).read())
-                return workers
+                cluster_state = json.loads(open(self.save_path).read())
+                return cluster_state
+    
+    def get_head_ip(self):
+        """Return the head ip in cluster meta data, or None if doesn't exist.
+        """
+        cluster_state = self._get()
+        if "head_ip" in cluster_state["meta"]:
+            return cluster_state["meta"]["head_ip"]
+        else:
+            return None
+    
+    def put_head_ip(self, head_ip):
+        """Update the head ip in cluster meta data 
+        """
+        
+        with self.lock:
+            with self.file_lock:
+                cluster_state = self._get()
+                cluster_state["meta"]["head_ip"] = head_ip
+                with open(self.save_path, "w") as f:
+                    logger.info(
+                        "ClusterState: "
+                        "Writing cluster state: {}".format(list(cluster_state["meta"]))
+                    )
+                    f.write(json.dumps(cluster_state))
 
-    def put(self, worker_id, info):
+    def get_nodes(self):
+        """Return all the nodes info on file 
+        """
+
+        cluster_state = self._get()
+        return cluster_state["nodes"]
+
+    def put_node(self, worker_id, info):
         """Update the node info for certain worker_id.
         """
         
@@ -113,29 +162,29 @@ class SlurmClusterState:
         assert "state" in info
         with self.lock:
             with self.file_lock:
-                workers = self.get()
-                workers[worker_id] = info
+                cluster_state = self._get()
+                cluster_state["nodes"][worker_id] = info
                 with open(self.save_path, "w") as f:
                     logger.info(
                         "ClusterState: "
-                        "Writing cluster state: {}".format(list(workers))
+                        "Writing cluster state: {}".format(list(cluster_state["nodes"]))
                     )
-                    f.write(json.dumps(workers))
+                    f.write(json.dumps(cluster_state))
     
-    def delete(self, worker_id: str):
+    def delete_node(self, worker_id: str):
         """Delete a worker from file.
         """
         with self.lock:
             with self.file_lock:
-                workers = self.get()
-                if worker_id in workers:
-                    workers.pop(worker_id)
+                cluster_state = self._get()
+                if worker_id in cluster_state["nodes"]:
+                    cluster_state["nodes"].pop(worker_id)
                 with open(self.save_path, "w") as f:
                     logger.info(
                         "ClusterState: "
-                        "Writing cluster state: {}".format(list(workers))
+                        "Writing cluster state: {}".format(list(cluster_state["nodes"]))
                     )
-                    f.write(json.dumps(workers))
+                    f.write(json.dumps(cluster_state))
 
 
 class NodeProvider:
@@ -339,7 +388,7 @@ class NodeProvider:
                         )
 
                         # Store pending info: will be updated by non_terminate_node
-                        self.state.put(node_id, node_info)
+                        self.state.put_node(node_id, node_info)
 
             else: # worker node under slurm
                 for _ in range(count):
@@ -347,6 +396,12 @@ class NodeProvider:
                     node_info = {}
                     node_info["state"] = NODE_STATE_PENDING
                     node_info["tags"] = tags
+
+                    '''
+                        Since worker node is started by the autoscaler thread
+                        The head node is garenteed to be started at this time
+                        So querying the head IP here is safe TODO:
+                    '''
                     
                     with self.state.lock:
                         with self.state.file_lock:
@@ -359,7 +414,7 @@ class NodeProvider:
                             )
 
                             # Store pending info: will be updated by non_terminate_node
-                            self.state.put(node_id, node_info)
+                            self.state.put_node(node_id, node_info)
 
         else: # not under slurm
             if is_head_node: 
@@ -386,7 +441,8 @@ class NodeProvider:
                     with self.state.file_lock:
                         subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
                         
-                        self.state.put(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
+                        self.state.put_node(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
+                        # TODO: Put head info
 
                 self._internal_ip_cache[self.head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
 
@@ -469,7 +525,7 @@ class NodeProvider:
         metadata.
         """
 
-        workers = self.state.get()
+        workers = self.state.get_nodes()
 
         if node_id not in workers:
             cli_logger.warning("Trying to terminate non-exsiting node\n")
@@ -482,7 +538,7 @@ class NodeProvider:
                 else:
                     slurm_cancel_job(node_id)
                 
-                self.state.delete(node_id)
+                self.state.delete_node(node_id)
 
         # if self.launched_nodes[node_id][INFO_IP_INDEX] in self._internal_ip_cache:
         #     self._internal_ip_cache.pop(self.launched_nodes[node_id][INFO_IP_INDEX])
@@ -516,7 +572,7 @@ class NodeProvider:
         Other node information on file remains unchanged
         """
         
-        workers = self.state.get()
+        workers = self.state.get_nodes()
         matching_ids = []
         for worker_id, info in workers.items():
             
@@ -526,9 +582,9 @@ class NodeProvider:
                 if SLURM_JOB_TRANS_MAP[slurm_job_status] != info["state"]:
                     info["state"] = SLURM_JOB_TRANS_MAP[slurm_job_status]
                     if info["state"] == NODE_STATE_TERMINATED:
-                        self.state.delete(worker_id)
+                        self.state.delete_node(worker_id)
                     else:
-                        self.state.put(worker_id, info)
+                        self.state.put_node(worker_id, info)
             
             if info["state"] == NODE_STATE_TERMINATED: 
                 continue
@@ -562,11 +618,11 @@ class NodeProvider:
     def set_node_tags(self, node_id: str, tags: Dict[str, str]) -> None:
         """Sets the tag values (string dict) for the specified node."""
         with self.state.file_lock:
-            workers = self.state.get()
+            workers = self.state.get_nodes()
             if node_id in workers:
                 info = workers[node_id]
                 info["tags"].update(tags)
-                self.state.put(node_id, info)
+                self.state.put_node(node_id, info)
                 return
             
         cli_logger.warning("Set tags is called non-exsiting node\n")
@@ -574,7 +630,7 @@ class NodeProvider:
     def node_tags(self, node_id: str) -> Dict[str, str]:
         """Returns the tags of the given node (string dict)."""
 
-        workers = self.state.get()
+        workers = self.state.get_nodes()
         if node_id in workers:
             return workers[node_id]["tags"]
         else:

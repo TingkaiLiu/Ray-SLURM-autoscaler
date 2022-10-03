@@ -102,6 +102,12 @@ class SlurmClusterState:
                     # Sanity check for file that doesn't fit the format
                     if ("meta" not in cluster_state) or ("nodes" not in cluster_state):
                         cluster_state = {"meta":{}, "nodes":{}}
+                    
+                    with open(self.save_path, "w") as f:
+                        logger.debug(
+                            "ClusterState: Writing cluster state: {}".format(cluster_state["nodes"])
+                        )
+                        f.write(json.dumps(cluster_state))
 
                 else:
                     cluster_state = {"meta":{}, "nodes":{}}

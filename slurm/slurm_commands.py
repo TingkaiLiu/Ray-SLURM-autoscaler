@@ -67,7 +67,6 @@ def slurm_launch_worker(
 def slurm_launch_head(
     template_folder: str, 
     temp_folder_name:str,
-    head_node: str,
     gcs_port: str,
     ray_client_port: str,
     dashboard_port: str, 
@@ -80,7 +79,6 @@ def slurm_launch_head(
     f.close()
     
     template = template.replace("[_PY_ADD_SLURM_CMD_]", additional_slurm_commands)
-    template = template.replace("[_PY_HEAD_NODE_]", head_node)
     template = template.replace("[_PY_PORT_]", gcs_port)
     template = template.replace("[_PY_INIT_COMMAND_]", init_commands)
     template = template.replace("[_PY_RAY_CLIENT_PORT_]", ray_client_port)

@@ -33,7 +33,7 @@ from ray.autoscaler._private.cli_logger import cli_logger
 
 import copy
 import os
-import time
+import socket
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ class SlurmClusterState:
     {
         "meta" : {
             "head_ip" : <head_ip>
+            "head_id" : <head_id>
         }
         "nodes" : {
             <id> : {
@@ -132,14 +133,24 @@ class SlurmClusterState:
         else:
             return None
     
-    def put_head_ip(self, head_ip):
-        """Update the head ip in cluster meta data 
+    def get_head_id(self):
+        """Get the id (slurm job id or HEAD_NODE_ID_OUTSIDE_SLURM) of the head
+        """
+        cluster_state = self._get()
+        if "head_id" in cluster_state["meta"]:
+            return cluster_state["meta"]["head_id"]
+        else:
+            return None
+        
+    def put_head_info(self, head_id, head_ip):
+        """Update the head ip and id (could be None) in cluster meta data 
         """
         
         with self.lock:
             with self.file_lock:
                 cluster_state = self._get()
                 cluster_state["meta"]["head_ip"] = head_ip
+                cluster_state["meta"]["head_id"] = head_id
                 with open(self.save_path, "w") as f:
                     logger.info(
                         "ClusterState: "
@@ -252,7 +263,7 @@ class NodeProvider:
         if not self.template_folder.endswith('/'):
             self.template_folder += '/'
 
-        self.head_ip = provider_config["head_ip"]
+        # self.head_ip = provider_config["head_ip"]
         self.gcs_port = provider_config["gcs_port"]
         self.ray_client_port = provider_config["ray_client_port"]
         self.dashboard_port = provider_config["dashboad_port"]
@@ -379,7 +390,6 @@ class NodeProvider:
                         node_id = slurm_launch_head(
                             self.template_folder,
                             self.temp_folder, 
-                            current_conf["head_node_name"], 
                             self.gcs_port,
                             self.ray_client_port,
                             self.dashboard_port,
@@ -389,26 +399,33 @@ class NodeProvider:
 
                         # Store pending info: will be updated by non_terminate_node
                         self.state.put_node(node_id, node_info)
+                        self.state.put_head_info(node_id, None)
 
             else: # worker node under slurm
+                '''
+                    Since worker node is started by the autoscaler thread
+                    The head node is garenteed to be started at this time
+                    So querying the head IP here is safe
+                '''
+                head_ip = self.state.get_head_ip()
+                if head_ip == None:
+                    head_id = self.state.get_head_id()
+                    assert head_id != HEAD_NODE_ID_OUTSIDE_SLURM
+                    head_ip = slurm_get_job_ip(head_id)
+                    self.state.put_head_info(head_id, head_ip)
+                
                 for _ in range(count):
                     
                     node_info = {}
                     node_info["state"] = NODE_STATE_PENDING
                     node_info["tags"] = tags
-
-                    '''
-                        Since worker node is started by the autoscaler thread
-                        The head node is garenteed to be started at this time
-                        So querying the head IP here is safe TODO:
-                    '''
                     
                     with self.state.lock:
                         with self.state.file_lock:
                             node_id = slurm_launch_worker(
                                 self.template_folder,
                                 self.temp_folder,
-                                self.head_ip+":"+self.gcs_port,
+                                head_ip+":"+self.gcs_port,
                                 parsed_init_command,
                                 parsed_add_slurm_command
                             )
@@ -419,11 +436,16 @@ class NodeProvider:
         else: # not under slurm
             if is_head_node: 
                 
+                if "head_ip" in current_conf:
+                    head_ip = current_conf["head_ip"]
+                else:
+                    head_ip = socket.gethostbyname(socket.gethostname())
+                
                 f = open(self.template_folder+"head.sh", "r")
                 template = f.read()
                 f.close()
                 
-                template = template.replace("[_PY_HEAD_NODE_IP_]", self.head_ip)
+                template = template.replace("[_PY_HEAD_NODE_IP_]", head_ip)
                 template = template.replace("[_PY_PORT_]", self.gcs_port)
                 template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
                 template = template.replace("[_PY_RAY_CLIENT_PORT_]", self.ray_client_port)
@@ -442,9 +464,9 @@ class NodeProvider:
                         subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
                         
                         self.state.put_node(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
-                        # TODO: Put head info
+                        self.state.put_head_info(HEAD_NODE_ID_OUTSIDE_SLURM, head_ip)
 
-                self._internal_ip_cache[self.head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
+                self._internal_ip_cache[head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
 
                 # Prepare the script for terminating node
                 f = open(self.template_folder+"end_head.sh", "r")
@@ -644,7 +666,7 @@ class NodeProvider:
     def internal_ip(self, node_id: str) -> Optional[str]:
         """Returns the internal ip (Ray ip) of the given node."""
         if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
-            return self.head_ip
+            return self.state.get_head_ip()
         else:
             return slurm_get_job_ip(node_id)
 

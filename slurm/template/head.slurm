@@ -15,7 +15,7 @@ set -x
 # __doc_head_address_start__
 
 # Getting the node names
-head_node="[_PY_HEAD_NODE_]" # To be replaced by python script
+head_node="$SLURMD_NODENAME"
 port="[_PY_PORT_]"
 ray_client_port="[_PY_RAY_CLIENT_PORT_]"
 dashboad_port="[_PY_DASHBOARD_PORT_]"

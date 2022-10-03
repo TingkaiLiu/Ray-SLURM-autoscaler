@@ -20,7 +20,6 @@ provider:
   module: ray.autoscaler._private.slurm.node_provider.NodeProvider
   temp_folder_name: [_DEPLOY_RAY_PATH_]/autoscaler/slurm/temp_script/ # Need to be absolute path
   template_path: [_DEPLOY_RAY_TEMPLATE_PATH_] # Need to be absolute path
-  head_ip: "127.0.0.1" # TODO:
   gcs_port: "6379"
   ray_client_port: "10001"
   dashboad_port : "8265"
@@ -36,12 +35,16 @@ available_node_types:
     node_config:
       head_node: 1 # needed by my create node. Do not modify 
       under_slurm: 1 # whether the head node should be started under slurm
-      head_node_name : "head" # TODO: only useful when launching head under slurm
+
+      # This fields will be filled automatically if not specified
+      # head_ip: "127.0.0.1" # only useful when launching head outside slurm
+
       init_commands:
         - conda activate env_name # TODO:
       additional_slurm_commands: 
         - "#SBATCH --reservation=username"
         - "#SBATCH --partition=cpu"
+        # - "#SBATCH -w node1"
   
   worker_node:
     # Minimum number of Ray workers of this type.

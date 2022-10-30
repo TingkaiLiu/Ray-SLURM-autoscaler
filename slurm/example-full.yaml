@@ -20,9 +20,9 @@ provider:
   module: ray.autoscaler._private.slurm.node_provider.NodeProvider
   temp_folder_name: [_DEPLOY_RAY_PATH_]/autoscaler/slurm/temp_script/ # Need to be absolute path
   template_path: [_DEPLOY_RAY_TEMPLATE_PATH_] # Need to be absolute path
-  gcs_port: "6379"
-  ray_client_port: "10001"
-  dashboad_port : "8265"
+  gcs_port: "6379" # will be replaced if the port is busy
+  ray_client_port: "10001" # will be replaced if the port is busy
+  dashboad_port : "8265" # will be replaced if the port is busy
 
 # Specify the type for the ray head node (as configured below).
 head_node_type: head_node

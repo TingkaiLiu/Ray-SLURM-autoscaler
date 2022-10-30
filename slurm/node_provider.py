@@ -34,6 +34,7 @@ from ray.autoscaler._private.cli_logger import cli_logger
 import copy
 import os
 import socket
+import random 
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,102 @@ HEAD_UNDER_SLURM = False
 WORKER_UNDER_SLURM = True
 DEFAULT_TEMP_FOLDER_NAME = "temp_script"
 
+# The range for getting free ports
+PORT_LOWER_BOUND = 20000
+PORT_HIGHER_BOUND = 30000
+
 filelock_logger = logging.getLogger("filelock")
 filelock_logger.setLevel(logging.WARNING)
+
+''' Heler functions '''
+
+def _test_free_port(local_ip: str, port: int) -> bool:
+    """ Check if a port is free on a NIC
+
+    Args:
+        local_ip: The IP of specific NIC on the local machine
+        port: The port to be tested
+    """
+    
+    ret = True
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    try:
+        s.bind((local_ip, port))
+    except OSError:
+        ret = False
+    
+    s.close()
+    return ret
+
+def _get_free_ports(local_ip: str, count: int) -> List[int]:
+    """Return free ports on a specific NIC
+
+    Args:
+        local_ip: The IP of specific NIC on the local machine
+        count: The number of ports to get
+    """
+    
+    ret = []
+    sockets = []
+
+    for _ in count:
+        s = socket.socket()
+
+        # The released port would be reused immediately
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        # Find to an available port
+        s.bind((local_ip, 0)) 
+
+        sockets.append(s)
+        ret.append(s.getsockname()[1])
+        
+    for s in sockets:
+        s.close()
+
+    return ret
+
+def _get_free_ports_range(local_ip: str, lower_bound: int, higher_bound: int, count: int) -> List[int]:
+    """Get a free ports within range [lower_boud, higher_bound] on a specific NIC
+
+    Args:
+        local_ip: The IP of specific NIC on the local machine
+        lower_bound: the lower bound of the port range
+        higher_bound: the higher bound of the port range
+        count: the number ports to get
+    """
+
+    ret = []
+    sockets = []
+
+    for _ in range(count):
+        s = socket.socket()
+
+        # The released port would be reused immediately
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        random.seed() # default seed is system time
+        
+        try_again = True
+        cur_port = random.randint(lower_bound, higher_bound) 
+        while try_again:
+            try:
+                s.bind((local_ip, cur_port))
+            except OSError:
+                cur_port = random.randint(lower_bound, higher_bound) 
+            else:
+                try_again = False
+
+        sockets.append(s)
+        ret.append(s.getsockname()[1])
+
+    for s in sockets:
+        s.close()
+
+    return ret
+
 
 class SlurmClusterState:
     """Maintain additional information on file for slurm cluster
@@ -66,9 +161,12 @@ class SlurmClusterState:
 
     File format:
     {
-        "meta" : {
+        "meta" : { # mainly about the head node
             "head_ip" : <head_ip>
             "head_id" : <head_id>
+            "gcs_port" : <gcs_port>
+            "client_port" : <ray_client_port>
+            "dashboard_port" : <dashboard_port>
         }
         "nodes" : {
             <id> : {
@@ -130,33 +228,26 @@ class SlurmClusterState:
                 cluster_state = json.loads(open(self.save_path).read())
                 return cluster_state
     
-    def get_head_ip(self):
-        """Return the head ip in cluster meta data, or None if doesn't exist.
+    def get_meta_info(self):
+        """Get the meta info section
         """
         cluster_state = self._get()
-        if "head_ip" in cluster_state["meta"]:
-            return cluster_state["meta"]["head_ip"]
-        else:
-            return None
-    
-    def get_head_id(self):
-        """Get the id (slurm job id or HEAD_NODE_ID_OUTSIDE_SLURM) of the head
-        """
-        cluster_state = self._get()
-        if "head_id" in cluster_state["meta"]:
-            return cluster_state["meta"]["head_id"]
-        else:
-            return None
+        return cluster_state["meta"]
         
-    def put_head_info(self, head_id, head_ip):
+    def put_meta_info(self, info):
         """Update the head ip and id (could be None) in cluster meta data 
         """
         
+        assert "head_ip" in info
+        assert "head_id" in info
+        assert "gcs_port" in info
+        assert "client_port" in info
+        assert "dashboard_port" in info
+
         with self.lock:
             with self.file_lock:
                 cluster_state = self._get()
-                cluster_state["meta"]["head_ip"] = head_ip
-                cluster_state["meta"]["head_id"] = head_id
+                cluster_state["meta"] = info
                 with open(self.save_path, "w") as f:
                     logger.info(
                         "ClusterState: "
@@ -164,7 +255,7 @@ class SlurmClusterState:
                     )
                     f.write(json.dumps(cluster_state))
     
-    def delete_head_info(self):
+    def delete_meta_info(self):
         with self.lock:
             with self.file_lock:
                 cluster_state = self._get()
@@ -176,6 +267,22 @@ class SlurmClusterState:
                     )
                     f.write(json.dumps(cluster_state))
 
+    def get_head_ip(self):
+        meta_info = self.get_meta_info()
+
+        if "head_ip" in meta_info:
+            return meta_info["head_ip"]
+        else:
+            return None
+    
+    def get_head_id(self):
+        meta_info = self.get_meta_info()
+
+        if "head_id" in meta_info:
+            return meta_info["head_id"]
+        else:
+            return None
+
     def get_nodes(self):
         """Return all the nodes info on file 
         """
@@ -183,7 +290,7 @@ class SlurmClusterState:
         cluster_state = self._get()
         return cluster_state["nodes"]
 
-    def put_node(self, worker_id, info):
+    def put_node(self, worker_id: str, info):
         """Update the node info for certain worker_id.
         """
         
@@ -282,6 +389,8 @@ class NodeProvider:
             self.template_folder += '/'
 
         # self.head_ip = provider_config["head_ip"]
+
+        # Will be replaced if the port is occupied
         self.gcs_port = provider_config["gcs_port"]
         self.ray_client_port = provider_config["ray_client_port"]
         self.dashboard_port = provider_config["dashboad_port"]
@@ -295,8 +404,7 @@ class NodeProvider:
             state_path,
             provider_config,
         )
-
-
+    
     @staticmethod
     def bootstrap_config(cluster_config: Dict[str, Any]) -> Dict[str, Any]:
         """Bootstraps the cluster config by adding env defaults if needed.
@@ -395,13 +503,21 @@ class NodeProvider:
             for cmd in current_conf["additional_slurm_commands"]:
                 parsed_add_slurm_command += cmd + "\n"
 
-        
-        if under_slurm:
-            if is_head_node: # head node under slurm
+
+        if is_head_node:
+
+            if under_slurm: # head node under slurm. Assume all ports are available
                 
                 node_info = {}
                 node_info["state"] = NODE_STATE_PENDING
                 node_info["tags"] = tags
+
+                meta_info = {}
+                meta_info["head_ip"] = None
+                meta_info["head_id"] = None
+                meta_info["gcs_port"] = self.gcs_port
+                meta_info["client_port"] = self.ray_client_port
+                meta_info["dashboard_port"] = self.dashboard_port
 
                 with self.state.lock:
                     with self.state.file_lock:
@@ -415,59 +531,42 @@ class NodeProvider:
                             parsed_add_slurm_command
                         )
 
+                        meta_info["head_id"] = node_id
+
                         # Store pending info: will be updated by non_terminate_node
                         self.state.put_node(node_id, node_info)
-                        self.state.put_head_info(node_id, None)
+                        self.state.put_meta_info(meta_info)
 
-            else: # worker node under slurm
-                '''
-                    Since worker node is started by the autoscaler thread
-                    The head node is garenteed to be started at this time
-                    So querying the head IP here is safe
-                '''
-                head_ip = self.state.get_head_ip()
-                if head_ip == None:
-                    head_id = self.state.get_head_id()
-                    assert head_id != HEAD_NODE_ID_OUTSIDE_SLURM
-                    head_ip = slurm_get_job_ip(head_id)
-                    self.state.put_head_info(head_id, head_ip)
-                
-                for _ in range(count):
-                    
-                    node_info = {}
-                    node_info["state"] = NODE_STATE_PENDING
-                    node_info["tags"] = tags
-                    
-                    with self.state.lock:
-                        with self.state.file_lock:
-                            node_id = slurm_launch_worker(
-                                self.template_folder,
-                                self.temp_folder,
-                                head_ip+":"+self.gcs_port,
-                                parsed_init_command,
-                                parsed_add_slurm_command
-                            )
-
-                            # Store pending info: will be updated by non_terminate_node
-                            self.state.put_node(node_id, node_info)
-
-        else: # not under slurm
-            if is_head_node: 
+            else: # if under_slurm
                 
                 if "head_ip" in current_conf:
                     head_ip = current_conf["head_ip"]
                 else:
                     head_ip = socket.gethostbyname(socket.gethostname())
+           
+                # Test whether the given port is free. If not, get new free ports
+                ray_ports = [self.gcs_port, self.ray_client_port, self.dashboard_port]
+                replace_index = [] # the index of the busy ports to be replaced
+
+                for i in range(len(ray_ports)):
+                    if not _test_free_port(head_ip, int(ray_ports[i])):
+                        cli_logger.warning("Port %s is not free. Replaced." % ray_ports[i])
+                        replace_index.append(i)
+
+                free_ports = _get_free_ports_range(head_ip, PORT_LOWER_BOUND, PORT_HIGHER_BOUND, len(replace_index))
+                for i in range(len(replace_index)):
+                    ray_ports[replace_index[i]] = str(free_ports[i])
                 
+                # Fill the launching file
                 f = open(self.template_folder+"head.sh", "r")
                 template = f.read()
                 f.close()
                 
                 template = template.replace("[_PY_HEAD_NODE_IP_]", head_ip)
-                template = template.replace("[_PY_PORT_]", self.gcs_port)
+                template = template.replace("[_PY_PORT_]", ray_ports[0])
                 template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
-                template = template.replace("[_PY_RAY_CLIENT_PORT_]", self.ray_client_port)
-                template = template.replace("[_PY_DASHBOARD_PORT_]", self.dashboard_port)
+                template = template.replace("[_PY_RAY_CLIENT_PORT_]", ray_ports[1])
+                template = template.replace("[_PY_DASHBOARD_PORT_]", ray_ports[2])
 
                 f = open(self.temp_folder+"/head.sh", "w")
                 f.write(template)
@@ -477,12 +576,19 @@ class NodeProvider:
                 node_info["state"] = NODE_STATE_RUNNING
                 node_info["tags"] = tags
 
+                meta_info = {}
+                meta_info["head_ip"] = head_ip
+                meta_info["head_id"] = HEAD_NODE_ID_OUTSIDE_SLURM
+                meta_info["gcs_port"] = ray_ports[0]
+                meta_info["client_port"] = ray_ports[1]
+                meta_info["dashboard_port"] = ray_ports[2]
+
                 with self.state.lock:
                     with self.state.file_lock:
                         subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
                         
                         self.state.put_node(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
-                        self.state.put_head_info(HEAD_NODE_ID_OUTSIDE_SLURM, head_ip)
+                        self.state.put_meta_info(meta_info) 
 
                 self._internal_ip_cache[head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
 
@@ -497,9 +603,43 @@ class NodeProvider:
                 f.write(template)
                 f.close()
 
-            else:
-                raise ValueError("Worker node must be launched under slurm. Change config file to fix")
-        
+        else: # worker node should under slurm
+            '''
+                Since worker node is started by the autoscaler thread
+                The head node is garenteed to be started at this time
+                So querying the meta info here is safe
+            '''
+            assert under_slurm
+
+            meta_info = self.state.get_meta_info()
+            head_ip = meta_info["head_ip"]
+            if head_ip == None: 
+                head_id = meta_info["head_id"]
+                assert head_id != HEAD_NODE_ID_OUTSIDE_SLURM
+                head_ip = slurm_get_job_ip(head_id)
+                meta_info["head_ip"] = head_ip
+                self.state.put_meta_info(meta_info)
+            
+            for _ in range(count):
+                
+                node_info = {}
+                node_info["state"] = NODE_STATE_PENDING
+                node_info["tags"] = tags
+                
+                with self.state.lock:
+                    with self.state.file_lock:
+                        node_id = slurm_launch_worker(
+                            self.template_folder,
+                            self.temp_folder,
+                            head_ip+":"+self.gcs_port,
+                            parsed_init_command,
+                            parsed_add_slurm_command
+                        )
+
+                        # Store pending info: will be updated by non_terminate_node
+                        self.state.put_node(node_id, node_info)
+
+
     def create_node_with_resources(
         self,
         node_config: Dict[str, Any],
@@ -582,7 +722,7 @@ class NodeProvider:
                 self.state.delete_node(node_id)
 
                 if node_id == head_id:
-                    self.state.delete_head_info()
+                    self.state.delete_meta_info()
 
         # if self.launched_nodes[node_id][INFO_IP_INDEX] in self._internal_ip_cache:
         #     self._internal_ip_cache.pop(self.launched_nodes[node_id][INFO_IP_INDEX])
@@ -682,7 +822,7 @@ class NodeProvider:
             return {}
 
     def external_ip(self, node_id: str) -> Optional[str]:
-        """Returns the external ip of the given node.TODO:"""
+        """Returns the external ip of the given node."""
         raise NotImplementedError("Must use internal IPs with slurm")
 
     def internal_ip(self, node_id: str) -> Optional[str]:

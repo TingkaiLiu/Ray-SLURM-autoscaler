@@ -28,6 +28,7 @@ def slurm_launch_worker(
     template_folder: str, 
     temp_folder_name: str, 
     head_ip_with_port: str, 
+    redis_password: str,
     init_commands: str,
     additional_slurm_commands: str
 ) -> str:
@@ -44,6 +45,7 @@ def slurm_launch_worker(
     template = template.replace("[_PY_ADD_SLURM_CMD_]", additional_slurm_commands)
     template = template.replace("[_PY_IP_HEAD_]", head_ip_with_port)
     template = template.replace("[_PY_INIT_COMMAND_]", init_commands)
+    template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
     f = open(temp_folder_name+"/worker.slurm", "w")
     f.write(template)
@@ -70,6 +72,7 @@ def slurm_launch_head(
     gcs_port: str,
     ray_client_port: str,
     dashboard_port: str, 
+    redis_password: str,
     init_commands: str,
     additional_slurm_commands: str
 ) -> str:
@@ -83,6 +86,7 @@ def slurm_launch_head(
     template = template.replace("[_PY_INIT_COMMAND_]", init_commands)
     template = template.replace("[_PY_RAY_CLIENT_PORT_]", ray_client_port)
     template = template.replace("[_PY_DASHBOARD_PORT_]", dashboard_port)
+    template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
     f = open(temp_folder_name+"/head.slurm", "w")
     f.write(template)

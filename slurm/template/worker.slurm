@@ -13,13 +13,15 @@
 set -x
 
 ip_head="[_PY_IP_HEAD_]" # To be replaced by python laucher
+password="[_PY_REDIS_PASSWORD_]"
 
 [_PY_INIT_COMMAND_] # To be replaced by python laucher
 
 echo "Starting WORKER"
 srun --nodes=1 --ntasks=1 \
     ray start --address "$ip_head" \
-    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_TASK}" --block &
+    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_TASK}" \
+    --redis-password="$password" --block &
 
 # __doc_worker_ray_end__
 

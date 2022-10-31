@@ -35,6 +35,8 @@ import copy
 import os
 import socket
 import random 
+import string
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,9 @@ DEFAULT_TEMP_FOLDER_NAME = "temp_script"
 # The range for getting free ports
 PORT_LOWER_BOUND = 20000
 PORT_HIGHER_BOUND = 30000
+
+PASSWORD_LENGTH = 10
+WAIT_HEAD_INTEVAL = 5 # second
 
 filelock_logger = logging.getLogger("filelock")
 filelock_logger.setLevel(logging.WARNING)
@@ -134,7 +139,7 @@ def _get_free_ports_range(local_ip: str, lower_bound: int, higher_bound: int, co
         # The released port would be reused immediately
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        random.seed() # default seed is system time
+        # random.seed() # default seed is system time
         
         try_again = True
         cur_port = random.randint(lower_bound, higher_bound) 
@@ -167,6 +172,7 @@ class SlurmClusterState:
             "gcs_port" : <gcs_port>
             "client_port" : <ray_client_port>
             "dashboard_port" : <dashboard_port>
+            "redis_password" : <redis_password>
         }
         "nodes" : {
             <id> : {
@@ -243,6 +249,7 @@ class SlurmClusterState:
         assert "gcs_port" in info
         assert "client_port" in info
         assert "dashboard_port" in info
+        assert "redis_password" in info
 
         with self.lock:
             with self.file_lock:
@@ -280,6 +287,14 @@ class SlurmClusterState:
 
         if "head_id" in meta_info:
             return meta_info["head_id"]
+        else:
+            return None
+    
+    def get_redis_password(self):
+        meta_info = self.get_meta_info()
+
+        if "redis_password" in meta_info:
+            return meta_info["redis_password"]
         else:
             return None
 
@@ -506,6 +521,8 @@ class NodeProvider:
 
         if is_head_node:
 
+            redis_password = ''.join(random.choices(string.ascii_uppercase + string.digits, k=PASSWORD_LENGTH))
+
             if under_slurm: # head node under slurm. Assume all ports are available
                 
                 node_info = {}
@@ -518,6 +535,7 @@ class NodeProvider:
                 meta_info["gcs_port"] = self.gcs_port
                 meta_info["client_port"] = self.ray_client_port
                 meta_info["dashboard_port"] = self.dashboard_port
+                meta_info["redis_password"] = redis_password
 
                 with self.state.lock:
                     with self.state.file_lock:
@@ -527,6 +545,7 @@ class NodeProvider:
                             self.gcs_port,
                             self.ray_client_port,
                             self.dashboard_port,
+                            redis_password,
                             parsed_init_command,
                             parsed_add_slurm_command
                         )
@@ -536,6 +555,28 @@ class NodeProvider:
                         # Store pending info: will be updated by non_terminate_node
                         self.state.put_node(node_id, node_info)
                         self.state.put_meta_info(meta_info)
+                
+                # Wait until the head node is up
+                cli_logger.warning("Waiting for the head to start...This can be block due to resource limit")
+                cli_logger.warning("If you force quit here, please run 'ray down <cluster_config>.ymal afterward to clean up")
+                
+                while slurm_get_job_status(node_id) != SLURM_JOB_RUNNING:
+                    time.sleep(WAIT_HEAD_INTEVAL)
+
+                head_ip = slurm_get_job_ip(node_id)
+                meta_info["head_ip"] = head_ip
+                self.state.put_meta_info(meta_info)
+
+                # Print out connection instruction
+                cli_logger.success("--------------------")
+                cli_logger.success("Ray runtime started.")
+                cli_logger.success("--------------------")
+                cli_logger.success("")
+                cli_logger.success("To connect to this Ray runtime, use the following Python code:")
+                cli_logger.success("  import ray")
+                cli_logger.success("  ray.init(address=\"ray://%s\")\n" \
+                    % (head_ip+":"+meta_info["client_port"]))
+                cli_logger.success("The redis password: %s\n" % redis_password)
 
             else: # if under_slurm
                 
@@ -567,6 +608,7 @@ class NodeProvider:
                 template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
                 template = template.replace("[_PY_RAY_CLIENT_PORT_]", ray_ports[1])
                 template = template.replace("[_PY_DASHBOARD_PORT_]", ray_ports[2])
+                template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
                 f = open(self.temp_folder+"/head.sh", "w")
                 f.write(template)
@@ -582,6 +624,7 @@ class NodeProvider:
                 meta_info["gcs_port"] = ray_ports[0]
                 meta_info["client_port"] = ray_ports[1]
                 meta_info["dashboard_port"] = ray_ports[2]
+                meta_info["redis_password"] = redis_password
 
                 with self.state.lock:
                     with self.state.file_lock:
@@ -611,14 +654,18 @@ class NodeProvider:
             '''
             assert under_slurm
 
+            
+            
             meta_info = self.state.get_meta_info()
             head_ip = meta_info["head_ip"]
-            if head_ip == None: 
-                head_id = meta_info["head_id"]
-                assert head_id != HEAD_NODE_ID_OUTSIDE_SLURM
-                head_ip = slurm_get_job_ip(head_id)
-                meta_info["head_ip"] = head_ip
-                self.state.put_meta_info(meta_info)
+            assert head_ip != None
+
+            # if head_ip == None: 
+            #     head_id = meta_info["head_id"]
+            #     assert head_id != HEAD_NODE_ID_OUTSIDE_SLURM
+            #     head_ip = slurm_get_job_ip(head_id)
+            #     meta_info["head_ip"] = head_ip
+            #     self.state.put_meta_info(meta_info)
             
             for _ in range(count):
                 
@@ -631,7 +678,8 @@ class NodeProvider:
                         node_id = slurm_launch_worker(
                             self.template_folder,
                             self.temp_folder,
-                            head_ip+":"+self.gcs_port,
+                            head_ip+":"+meta_info["gcs_port"],
+                            meta_info["redis_password"],
                             parsed_init_command,
                             parsed_add_slurm_command
                         )

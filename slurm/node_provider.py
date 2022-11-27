@@ -226,7 +226,7 @@ class NodeProvider:
         )
 
         # Sub-node providers
-        self.slurm_node = SlurmNode(self.state)
+        self.slurm_node = SlurmNode(self.state, self.template_folder, self.temp_folder)
     
     @staticmethod
     def bootstrap_config(cluster_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -325,7 +325,10 @@ class NodeProvider:
 
             if under_slurm: # head node under slurm. Assume all ports are available
                 
-                self.slurm_node.create_head_node(current_conf, tags, redis_password)
+                self.slurm_node.create_head_node(
+                    current_conf, tags, redis_password,
+                    self.gcs_port, self.ray_client_port, self.dashboard_port
+                )
 
             else: 
                 
@@ -588,7 +591,7 @@ class NodeProvider:
                 cli_logger.warning("Get tags for non-existing node\n")
                 return {}
         elif node_id.startswith(SLURM_NODE_PREFIX):
-            self.slurm_node.node_tags(node_id)
+            return self.slurm_node.node_tags(node_id)
 
     def external_ip(self, node_id: str) -> Optional[str]:
         """Returns the external ip of the given node."""

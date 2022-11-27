@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+from types import ModuleType
 import copy
 import time
 
@@ -47,11 +48,18 @@ class SlurmNode:
 
     """
 
-    def __init__(self, cluster_state: SlurmClusterState) -> None:
+    def __init__(self, 
+        cluster_state: SlurmClusterState, 
+        template_folder: str,
+        temp_folder: str
+    ) -> None:
         self.state = cluster_state
+        self.template_folder = template_folder
+        self.temp_folder = temp_folder
 
     def create_head_node( # TODO: set memory constraint
-        self, node_config: Dict[str, Any], tags: Dict[str, str], redis_password: str
+        self, node_config: Dict[str, Any], tags: Dict[str, str], redis_password: str,
+        gcs_port: str, ray_client_port: str, dashboard_port: str
     ) -> Optional[Dict[str, Any]]:
         """Creates a head node under Slurm
 
@@ -88,9 +96,9 @@ class SlurmNode:
         meta_info = {}
         meta_info["head_ip"] = None
         meta_info["head_id"] = None
-        meta_info["gcs_port"] = self.gcs_port
-        meta_info["client_port"] = self.ray_client_port
-        meta_info["dashboard_port"] = self.dashboard_port
+        meta_info["gcs_port"] = gcs_port
+        meta_info["client_port"] = ray_client_port
+        meta_info["dashboard_port"] = dashboard_port
         meta_info["redis_password"] = redis_password
 
         with self.state.lock:
@@ -98,9 +106,9 @@ class SlurmNode:
                 node_id = slurm_launch_head(
                     self.template_folder,
                     self.temp_folder, 
-                    self.gcs_port,
-                    self.ray_client_port,
-                    self.dashboard_port,
+                    gcs_port,
+                    ray_client_port,
+                    dashboard_port,
                     redis_password,
                     parsed_init_command,
                     parsed_add_slurm_command

@@ -6,24 +6,30 @@ Using the node_provider.py template
 
 """
 
+import copy
+import os
+import socket
+import random 
+import string
 import subprocess
-import json
 import logging
 from types import ModuleType
 from typing import Any, Dict, List, Optional
 
 from ray.autoscaler.command_runner import CommandRunnerInterface
 from ray.autoscaler._private.slurm.empty_command_runner import EmptyCommandRunner
+from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
 
-from ray.autoscaler._private.slurm.slurm_commands import (
-    slurm_cancel_job,
-    slurm_launch_head,
-    slurm_launch_worker,
-    slurm_get_job_ip,
-    slurm_get_job_status,
-    SLURM_JOB_RUNNING,
-    SLURM_JOB_PENDING,
-    SLURM_JOB_NOT_EXIST
+from ray.autoscaler._private.slurm.slurm_node import SlurmNode
+
+
+from ray.autoscaler._private.slurm import (
+    NODE_STATE_RUNNING,
+    NODE_STATE_PENDING,
+    NODE_STATE_TERMINATED,
+    PASSWORD_LENGTH,
+    WAIT_HEAD_INTEVAL,
+    SLURM_NODE_PREFIX
 )
 
 from threading import RLock # reentrant lock
@@ -31,27 +37,7 @@ from filelock import FileLock # reentrant (recursive) lock
 
 from ray.autoscaler._private.cli_logger import cli_logger
 
-import copy
-import os
-import socket
-import random 
-import string
-import time
-
 logger = logging.getLogger(__name__)
-
-# Const
-NODE_STATE_RUNNING = "running"
-NODE_STATE_PENDING = "pending"
-NODE_STATE_TERMINATED = "terminated"
-
-# Map slurm job status to node states
-SLURM_JOB_TRANS_MAP = {
-    SLURM_JOB_RUNNING : NODE_STATE_RUNNING,
-    SLURM_JOB_PENDING : NODE_STATE_PENDING,
-    SLURM_JOB_NOT_EXIST : NODE_STATE_TERMINATED
-}
-
 
 HEAD_NODE_ID_OUTSIDE_SLURM = "-1" # TODO: Pid? 
 
@@ -63,9 +49,6 @@ DEFAULT_TEMP_FOLDER_NAME = "temp_script"
 # The range for getting free ports
 PORT_LOWER_BOUND = 20000
 PORT_HIGHER_BOUND = 30000
-
-PASSWORD_LENGTH = 10
-WAIT_HEAD_INTEVAL = 5 # second
 
 filelock_logger = logging.getLogger("filelock")
 filelock_logger.setLevel(logging.WARNING)
@@ -160,184 +143,6 @@ def _get_free_ports_range(local_ip: str, lower_bound: int, higher_bound: int, co
     return ret
 
 
-class SlurmClusterState:
-    """Maintain additional information on file for slurm cluster
-    (modified from local.ClusterState)
-
-    File format:
-    {
-        "meta" : { # mainly about the head node
-            "head_ip" : <head_ip>
-            "head_id" : <head_id>
-            "gcs_port" : <gcs_port>
-            "client_port" : <ray_client_port>
-            "dashboard_port" : <dashboard_port>
-            "redis_password" : <redis_password>
-        }
-        "nodes" : {
-            <id> : {
-                "state" : <state>,
-                "tags" : <tag>
-            }
-        }
-    }
-
-    Information needed for each node:
-    1. Slurm job id (major key)
-    2. State: running, pending, terminated (should just be deleted)
-    3. Tag (set and read by updater)
-
-    The node states on file may not be up to date---need to query slurm for updating
-    The updates are performed by non-terminate-node() call
-    """
-
-    def __init__(self, lock_path, save_path, provider_config):
-        
-        self.lock = RLock()
-        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-        self.file_lock = FileLock(lock_path)
-        self.save_path = save_path
-
-        with self.lock:
-            with self.file_lock:
-                if os.path.exists(self.save_path): # Reload the cluser states
-                    cluster_state = json.loads(open(self.save_path).read())
-                    
-                    # Sanity check for file that doesn't fit the format
-                    if ("meta" not in cluster_state) or ("nodes" not in cluster_state):
-                        cluster_state = {"meta":{}, "nodes":{}}
-                    
-                    with open(self.save_path, "w") as f:
-                        logger.debug(
-                            "ClusterState: Writing cluster state: {}".format(cluster_state["nodes"])
-                        )
-                        f.write(json.dumps(cluster_state))
-
-                else:
-                    cluster_state = {"meta":{}, "nodes":{}}
-                    with open(self.save_path, "w") as f:
-                        logger.debug(
-                            "ClusterState: Writing cluster state: {}".format(cluster_state["nodes"])
-                        )
-                        f.write(json.dumps(cluster_state))
-
-        logger.info(
-            "ClusterState: Loaded cluster state: {}".format(list(cluster_state["nodes"]))
-        )
-
-    def _get(self):
-        """Return all the whole cluster info on file.
-        """
-        
-        with self.lock:
-            with self.file_lock:
-                cluster_state = json.loads(open(self.save_path).read())
-                return cluster_state
-    
-    def get_meta_info(self):
-        """Get the meta info section
-        """
-        cluster_state = self._get()
-        return cluster_state["meta"]
-        
-    def put_meta_info(self, info):
-        """Update the head ip and id (could be None) in cluster meta data 
-        """
-        
-        assert "head_ip" in info
-        assert "head_id" in info
-        assert "gcs_port" in info
-        assert "client_port" in info
-        assert "dashboard_port" in info
-        assert "redis_password" in info
-
-        with self.lock:
-            with self.file_lock:
-                cluster_state = self._get()
-                cluster_state["meta"] = info
-                with open(self.save_path, "w") as f:
-                    logger.info(
-                        "ClusterState: "
-                        "Writing cluster state: {}".format(list(cluster_state["meta"]))
-                    )
-                    f.write(json.dumps(cluster_state))
-    
-    def delete_meta_info(self):
-        with self.lock:
-            with self.file_lock:
-                cluster_state = self._get()
-                cluster_state["meta"] = {}
-                with open(self.save_path, "w") as f:
-                    logger.info(
-                        "ClusterState: "
-                        "Writing cluster state: {}".format(list(cluster_state["meta"]))
-                    )
-                    f.write(json.dumps(cluster_state))
-
-    def get_head_ip(self):
-        meta_info = self.get_meta_info()
-
-        if "head_ip" in meta_info:
-            return meta_info["head_ip"]
-        else:
-            return None
-    
-    def get_head_id(self):
-        meta_info = self.get_meta_info()
-
-        if "head_id" in meta_info:
-            return meta_info["head_id"]
-        else:
-            return None
-    
-    def get_redis_password(self):
-        meta_info = self.get_meta_info()
-
-        if "redis_password" in meta_info:
-            return meta_info["redis_password"]
-        else:
-            return None
-
-    def get_nodes(self):
-        """Return all the nodes info on file 
-        """
-
-        cluster_state = self._get()
-        return cluster_state["nodes"]
-
-    def put_node(self, worker_id: str, info):
-        """Update the node info for certain worker_id.
-        """
-        
-        assert "tags" in info
-        assert "state" in info
-        with self.lock:
-            with self.file_lock:
-                cluster_state = self._get()
-                cluster_state["nodes"][worker_id] = info
-                with open(self.save_path, "w") as f:
-                    logger.info(
-                        "ClusterState: "
-                        "Writing cluster state: {}".format(list(cluster_state["nodes"]))
-                    )
-                    f.write(json.dumps(cluster_state))
-    
-    def delete_node(self, worker_id: str):
-        """Delete a worker from file.
-        """
-        with self.lock:
-            with self.file_lock:
-                cluster_state = self._get()
-                if worker_id in cluster_state["nodes"]:
-                    cluster_state["nodes"].pop(worker_id)
-                with open(self.save_path, "w") as f:
-                    logger.info(
-                        "ClusterState: "
-                        "Writing cluster state: {}".format(list(cluster_state["nodes"]))
-                    )
-                    f.write(json.dumps(cluster_state))
-
-
 class NodeProvider:
     """Interface for getting and returning nodes from a Cloud.
 
@@ -419,6 +224,9 @@ class NodeProvider:
             state_path,
             provider_config,
         )
+
+        # Sub-node providers
+        self.slurm_node = SlurmNode(self.state)
     
     @staticmethod
     def bootstrap_config(cluster_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -477,6 +285,7 @@ class NodeProvider:
         self, node_config: Dict[str, Any], tags: Dict[str, str], count: int
     ) -> Optional[Dict[str, Any]]:
         """Creates a number of nodes within the namespace.
+            The node creating is forwarded to sub-node providers
 
         Args:
             node_config: the "node_config" section of specific node type (under
@@ -493,13 +302,14 @@ class NodeProvider:
         current_conf = copy.deepcopy(node_config)
 
         if "head_node" not in current_conf:
-            raise ValueError("Must specify whether the node is head in the node config")
-        
-        is_head_node = current_conf["head_node"] == 1
+            is_head_node = False
+        else:
+            is_head_node = current_conf["head_node"] == 1
+
         if is_head_node and count != 1:
             raise ValueError("Cannot create more than one head")
+        
         under_slurm = False
-
         if "under_slurm" in current_conf:
             under_slurm = current_conf["under_slurm"] == 1
         else:
@@ -507,16 +317,6 @@ class NodeProvider:
                 under_slurm = HEAD_UNDER_SLURM
             else:
                 under_slurm = WORKER_UNDER_SLURM
-        
-        parsed_init_command = ""
-        if "init_commands" in current_conf:
-            for init in current_conf["init_commands"]:
-                parsed_init_command += init + "\n"
-        
-        parsed_add_slurm_command = ""
-        if "additional_slurm_commands" in current_conf:
-            for cmd in current_conf["additional_slurm_commands"]:
-                parsed_add_slurm_command += cmd + "\n"
 
 
         if is_head_node:
@@ -525,61 +325,20 @@ class NodeProvider:
 
             if under_slurm: # head node under slurm. Assume all ports are available
                 
-                node_info = {}
-                node_info["state"] = NODE_STATE_PENDING
-                node_info["tags"] = tags
+                self.slurm_node.create_head_node(current_conf, tags, redis_password)
 
-                meta_info = {}
-                meta_info["head_ip"] = None
-                meta_info["head_id"] = None
-                meta_info["gcs_port"] = self.gcs_port
-                meta_info["client_port"] = self.ray_client_port
-                meta_info["dashboard_port"] = self.dashboard_port
-                meta_info["redis_password"] = redis_password
-
-                with self.state.lock:
-                    with self.state.file_lock:
-                        node_id = slurm_launch_head(
-                            self.template_folder,
-                            self.temp_folder, 
-                            self.gcs_port,
-                            self.ray_client_port,
-                            self.dashboard_port,
-                            redis_password,
-                            parsed_init_command,
-                            parsed_add_slurm_command
-                        )
-
-                        meta_info["head_id"] = node_id
-
-                        # Store pending info: will be updated by non_terminate_node
-                        self.state.put_node(node_id, node_info)
-                        self.state.put_meta_info(meta_info)
+            else: 
                 
-                # Wait until the head node is up
-                cli_logger.warning("Waiting for the head to start...This can be block due to resource limit")
-                cli_logger.warning("If you force quit here, please run 'ray down <cluster_config>.ymal afterward to clean up")
+                parsed_init_command = ""
+                if "init_commands" in current_conf:
+                    for init in current_conf["init_commands"]:
+                        parsed_init_command += init + "\n"
                 
-                while slurm_get_job_status(node_id) != SLURM_JOB_RUNNING:
-                    time.sleep(WAIT_HEAD_INTEVAL)
+                parsed_add_slurm_command = ""
+                if "additional_slurm_commands" in current_conf:
+                    for cmd in current_conf["additional_slurm_commands"]:
+                        parsed_add_slurm_command += cmd + "\n"
 
-                head_ip = slurm_get_job_ip(node_id)
-                meta_info["head_ip"] = head_ip
-                self.state.put_meta_info(meta_info)
-
-                # Print out connection instruction
-                cli_logger.success("--------------------")
-                cli_logger.success("Ray runtime started.")
-                cli_logger.success("--------------------")
-                cli_logger.success("")
-                cli_logger.success("To connect to this Ray runtime, use the following Python code:")
-                cli_logger.success("  import ray")
-                cli_logger.success("  ray.init(address=\"ray://%s\")\n" \
-                    % (head_ip+":"+meta_info["client_port"]))
-                cli_logger.success("The redis password: %s\n" % redis_password)
-
-            else: # if under_slurm
-                
                 if "head_ip" in current_conf:
                     head_ip = current_conf["head_ip"]
                 else:
@@ -646,46 +405,9 @@ class NodeProvider:
                 f.write(template)
                 f.close()
 
-        else: # worker node should under slurm
-            '''
-                Since worker node is started by the autoscaler thread
-                The head node is garenteed to be started at this time
-                So querying the meta info here is safe
-            '''
-            assert under_slurm
-
-            
-            
-            meta_info = self.state.get_meta_info()
-            head_ip = meta_info["head_ip"]
-            assert head_ip != None
-
-            # if head_ip == None: 
-            #     head_id = meta_info["head_id"]
-            #     assert head_id != HEAD_NODE_ID_OUTSIDE_SLURM
-            #     head_ip = slurm_get_job_ip(head_id)
-            #     meta_info["head_ip"] = head_ip
-            #     self.state.put_meta_info(meta_info)
-            
-            for _ in range(count):
-                
-                node_info = {}
-                node_info["state"] = NODE_STATE_PENDING
-                node_info["tags"] = tags
-                
-                with self.state.lock:
-                    with self.state.file_lock:
-                        node_id = slurm_launch_worker(
-                            self.template_folder,
-                            self.temp_folder,
-                            head_ip+":"+meta_info["gcs_port"],
-                            meta_info["redis_password"],
-                            parsed_init_command,
-                            parsed_add_slurm_command
-                        )
-
-                        # Store pending info: will be updated by non_terminate_node
-                        self.state.put_node(node_id, node_info)
+        else: 
+            # worker node should under slurm
+            self.slurm_node.create_worker_node(current_conf, tags, count)
 
 
     def create_node_with_resources(
@@ -728,23 +450,36 @@ class NodeProvider:
             docker_config(dict): If set, the docker information of the docker
                 container that commands should be run on.
         """
-        common_args = {
-            "log_prefix": log_prefix,
-            "node_id": node_id,
-            "provider": self,
-            "auth_config": auth_config,
-            "cluster_name": cluster_name,
-            "process_runner": process_runner,
-            "use_internal_ip": use_internal_ip,
-            "under_slurm" : node_id != HEAD_NODE_ID_OUTSIDE_SLURM,
-        }
 
-        # if docker_config and docker_config["container_name"] != "":
-        #     return DockerCommandRunner(docker_config, **common_args)
-        # else:
-        #     return SSHCommandRunner(**common_args)
+        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+            common_args = {
+                "log_prefix": log_prefix,
+                "node_id": node_id,
+                "provider": self,
+                "auth_config": auth_config,
+                "cluster_name": cluster_name,
+                "process_runner": process_runner,
+                "use_internal_ip": use_internal_ip,
+                "under_slurm" : False,
+            }
 
-        return EmptyCommandRunner(**common_args)  
+            # if docker_config and docker_config["container_name"] != "":
+            #     return DockerCommandRunner(docker_config, **common_args)
+            # else:
+            #     return SSHCommandRunner(**common_args)
+
+            return EmptyCommandRunner(**common_args)  
+        
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            return self.slurm_node.get_command_runner(
+                log_prefix,
+                node_id,
+                auth_config,
+                cluster_name,
+                process_runner,
+                use_internal_ip,
+                docker_config
+            )
 
     def terminate_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Terminates the specified node.
@@ -753,31 +488,18 @@ class NodeProvider:
         metadata.
         """
 
-        workers = self.state.get_nodes()
-        head_id = self.state.get_head_id()
-
-        if node_id not in workers:
-            cli_logger.warning("Trying to terminate non-exsiting node\n")
-            return
-        
-        with self.state.lock:
-            with self.state.file_lock:
-                if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+            with self.state.lock:
+                with self.state.file_lock: 
                     subprocess.run(["bash", "-l", self.temp_folder+"/end_head.sh"]) # TODO: check error
-                else:
-                    slurm_cancel_job(node_id)
-                
-                self.state.delete_node(node_id)
+                    self.state.delete_node(node_id)  
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            self.slurm_node.terminate_node(node_id)
 
-                if node_id == head_id:
-                    self.state.delete_meta_info()
-
-        # if self.launched_nodes[node_id][INFO_IP_INDEX] in self._internal_ip_cache:
-        #     self._internal_ip_cache.pop(self.launched_nodes[node_id][INFO_IP_INDEX])
-
-
-        # TODO: check head? 
-
+        head_id = self.state.get_head_id()
+        if node_id == head_id:
+            self.state.delete_meta_info()
+            
 
     def terminate_nodes(self, node_ids: List[str]) -> Optional[Dict[str, Any]]:
         """Terminates a set of nodes.
@@ -804,30 +526,24 @@ class NodeProvider:
         Other node information on file remains unchanged
         """
         
+        # Get the node outside any sub node providers
         workers = self.state.get_nodes()
         matching_ids = []
         for worker_id, info in workers.items():
-            
-            if worker_id != HEAD_NODE_ID_OUTSIDE_SLURM:
-                # Update node status
-                slurm_job_status = slurm_get_job_status(worker_id)
-                if SLURM_JOB_TRANS_MAP[slurm_job_status] != info["state"]:
-                    info["state"] = SLURM_JOB_TRANS_MAP[slurm_job_status]
-                    if info["state"] == NODE_STATE_TERMINATED:
-                        self.state.delete_node(worker_id)
-                    else:
-                        self.state.put_node(worker_id, info)
-            
-            if info["state"] == NODE_STATE_TERMINATED: 
-                continue
+            if worker_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+                if info["state"] == NODE_STATE_TERMINATED: 
+                    continue
 
-            ok = True
-            for k, v in tag_filters.items():
-                if info["tags"].get(k) != v:
-                    ok = False
-                    break
-            if ok:
-                matching_ids.append(worker_id)
+                ok = True
+                for k, v in tag_filters.items():
+                    if info["tags"].get(k) != v:
+                        ok = False
+                        break
+                if ok:
+                    matching_ids.append(worker_id)
+        
+        # Combine with the nodes from sub node providers
+        matching_ids.extend(self.slurm_node.non_terminated_nodes(tag_filters))
 
         return matching_ids
 
@@ -835,39 +551,44 @@ class NodeProvider:
         """Return whether the specified node is running."""
 
         if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
-            return True # TODO:
-        else:
-            return slurm_get_job_status(node_id) == SLURM_JOB_RUNNING
-
+            return True # TODO:  
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            return self.slurm_node.is_running(node_id)
 
     def is_terminated(self, node_id: str) -> bool:
         """Return whether the specified node is terminated."""
         if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
             return False # TODO:
-        else:
-            return slurm_get_job_status(node_id) == SLURM_JOB_NOT_EXIST
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            return self.slurm_node.is_terminated(node_id)
     
     def set_node_tags(self, node_id: str, tags: Dict[str, str]) -> None:
         """Sets the tag values (string dict) for the specified node."""
-        with self.state.file_lock:
-            workers = self.state.get_nodes()
-            if node_id in workers:
-                info = workers[node_id]
-                info["tags"].update(tags)
-                self.state.put_node(node_id, info)
-                return
-            
-        cli_logger.warning("Set tags is called non-exsiting node\n")
+        
+        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+            with self.state.file_lock:
+                workers = self.state.get_nodes()
+                if node_id in workers:
+                    info = workers[node_id]
+                    info["tags"].update(tags)
+                    self.state.put_node(node_id, info)
+                    return
+            cli_logger.warning("Set tags is called non-exsiting node\n")
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            self.slurm_node.set_node_tags(node_id, tags)
 
     def node_tags(self, node_id: str) -> Dict[str, str]:
         """Returns the tags of the given node (string dict)."""
 
-        workers = self.state.get_nodes()
-        if node_id in workers:
-            return workers[node_id]["tags"]
-        else:
-            cli_logger.warning("Get tags for non-existing node\n")
-            return {}
+        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+            workers = self.state.get_nodes()
+            if node_id in workers:
+                return workers[node_id]["tags"]
+            else:
+                cli_logger.warning("Get tags for non-existing node\n")
+                return {}
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            self.slurm_node.node_tags(node_id)
 
     def external_ip(self, node_id: str) -> Optional[str]:
         """Returns the external ip of the given node."""
@@ -877,8 +598,8 @@ class NodeProvider:
         """Returns the internal ip (Ray ip) of the given node."""
         if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
             return self.state.get_head_ip()
-        else:
-            return slurm_get_job_ip(node_id)
+        elif node_id.startswith(SLURM_NODE_PREFIX):
+            return self.slurm_node.internal_ip(node_id)
 
     def get_node_id(self, ip_address: str, use_internal_ip: bool = True) -> str:
         """Returns the node_id given an IP address.
@@ -925,4 +646,3 @@ class NodeProvider:
             raise ValueError(f"ip {ip_address} not found. " + known_msg)
 
         return find_node_id()
-        

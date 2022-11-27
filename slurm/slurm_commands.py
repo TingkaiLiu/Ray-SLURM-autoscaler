@@ -7,7 +7,10 @@ Created by Tingkai Liu (tingkai2@illinois.edu) on June 17, 2022
 
 import subprocess
 from ray.autoscaler._private.cli_logger import cli_logger
-from ray.autoscaler._private.slurm import SLURM_IP_LOOKUP
+from ray.autoscaler._private.slurm import (
+    SLURM_IP_LOOKUP,
+    SLURM_NODE_PREFIX
+)
 
 # Public Const
 SLURM_JOB_RUNNING = "R"
@@ -19,6 +22,11 @@ SLURM_INFO_NODE_IDX = -1
 SLURM_INFO_JOB_STATUS_IDX = 4
 
 def slurm_cancel_job(job_id: str):
+    if not job_id.startswith(SLURM_NODE_PREFIX):
+        cli_logger.warning("Slurm interface: invalid job id")
+        return
+    job_id = job_id[len(SLURM_NODE_PREFIX):]
+    
     if job_id.isdecimal():
         subprocess.run(["scancel", job_id])
     else:
@@ -63,7 +71,7 @@ def slurm_launch_worker(
         cli_logger.error("Slurm error when starting worker")
         raise ValueError("Slurm error when starting worker")
 
-    return worker_job_id
+    return SLURM_NODE_PREFIX + worker_job_id
     
 
 def slurm_launch_head(
@@ -104,13 +112,18 @@ def slurm_launch_head(
         cli_logger.error("Slurm error when starting head")
         raise ValueError("Slurm error when starting head")
     
-    return head_job_id
+    return SLURM_NODE_PREFIX + head_job_id
 
 def slurm_get_job_ip(job_id: str) -> str:
     '''Return ip of the node which job_id is assigned to 
 
         Assuming each job takes only one node
     '''
+
+    if not job_id.startswith(SLURM_NODE_PREFIX):
+        cli_logger.warning("Slurm interface: invalid job id")
+        return None
+    job_id = job_id[len(SLURM_NODE_PREFIX):]
     
     slurm_command = ["squeue", "-j "+job_id]
 
@@ -132,6 +145,11 @@ def slurm_get_job_ip(job_id: str) -> str:
 def slurm_get_job_status(job_id: str) -> str:
     '''Return the job status given the job id
     '''
+
+    if not job_id.startswith(SLURM_NODE_PREFIX):
+        cli_logger.warning("Slurm interface: invalid job id")
+        return SLURM_JOB_NOT_EXIST
+    job_id = job_id[len(SLURM_NODE_PREFIX):]
 
     slurm_command = ["squeue", "-j "+job_id]
 

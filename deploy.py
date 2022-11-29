@@ -57,6 +57,7 @@ if __name__ == "__main__":
         "slurm/slurm_commands.py",
         "slurm/cluster_state.py",
         "slurm/slurm_node.py",
+        "slurm/cloud_k8s_node.py",
         RAY_SLURM_PATH
     ])
 

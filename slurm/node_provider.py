@@ -29,7 +29,8 @@ from ray.autoscaler._private.slurm import (
     NODE_STATE_TERMINATED,
     PASSWORD_LENGTH,
     WAIT_HEAD_INTEVAL,
-    SLURM_NODE_PREFIX
+    SLURM_NODE_PREFIX,
+    K8S_NODE_PREFIX
 )
 
 from threading import RLock # reentrant lock

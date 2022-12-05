@@ -23,6 +23,7 @@ provider:
   gcs_port: "6379" # will be replaced if the port is busy
   ray_client_port: "10001" # will be replaced if the port is busy
   dashboad_port : "8265" # will be replaced if the port is busy
+  k8s_namespace: "default"
 
 # Specify the type for the ray head node (as configured below).
 head_node_type: head_node
@@ -33,8 +34,9 @@ available_node_types:
     max_workers: 0 # do not modify
     resources: {"CPU": [_DEPLOY_HEAD_CPUS_], "GPU": [_DEPLOY_HEAD_GPUS_]} # will be used by autoscaler scheduler
     node_config:
-      head_node: 1 # needed by my create node. Do not modify 
-      under_slurm: 1 # whether the head node should be started under slurm
+      # head_node: 1 # needed by my create node. Do not modify 
+      # node_type: "SLURM"
+      node_type: "BARE"
 
       # This fields will be filled automatically if not specified
       # head_ip: "127.0.0.1" # only useful when launching head outside slurm
@@ -46,7 +48,7 @@ available_node_types:
         - "#SBATCH --partition=cpu"
         # - "#SBATCH -w node1"
   
-  worker_node:
+  slurm_worker_node:
     # Minimum number of Ray workers of this type.
     min_workers: 0
     # Maximum number of Ray workers of this type. Takes precedence over min_workers.
@@ -55,12 +57,37 @@ available_node_types:
     resources: {"CPU": [_DEPLOY_WORKER_CPUS_], "GPU": [_DEPLOY_WORKER_GPUS_]} # will be used by autoscaler scheduler
     node_config: 
       head_node: 0 # needed by my create node. Do not modify 
-      under_slurm: 1 # doesn't matter. Worker node has to under slurm
+      node_type: "SLURM"
       init_commands:
         - conda activate env_name # TODO:
       additional_slurm_commands: 
         - "#SBATCH --reservation=username"
         - "#SBATCH --partition=cpu"
+  
+  cloud_node_1:
+    min_workers: 0
+    max_workers: 1
+    resources: {"CPU": 4, "GPU": 0}
+    node_config:
+      id: "1"
+      head_node: 0
+      node_type: "K8S"
+      node-manager-port: 30008
+      object-manager-port: 30009
+      min-worker-port: 30010
+      max-worker-port: 30045
+  cloud_node_2:
+    min_workers: 0
+    max_workers: 1
+    resources: {"CPU": 4, "GPU": 0}
+    node_config:
+      id: "2"
+      head_node: 0
+      node_type: "K8S"
+      node-manager-port: 30048
+      object-manager-port: 30049
+      min-worker-port: 30050
+      max-worker-port: 30085
   
 
 # Do not modify the fields below!

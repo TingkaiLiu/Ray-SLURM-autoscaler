@@ -7,26 +7,30 @@ from types import ModuleType
 import copy
 import logging
 import time
-from uuid import uuid4
+import yaml
 
 from ray.autoscaler._private.slurm import (
     K8S_NODE_PREFIX
 )
 from ray.autoscaler.command_runner import CommandRunnerInterface
 from ray.autoscaler._private.command_runner import KubernetesCommandRunner
+from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
 
 import kubernetes
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
-from ray.autoscaler.tags import NODE_KIND_HEAD, TAG_RAY_CLUSTER_NAME, TAG_RAY_NODE_KIND
+from ray.autoscaler.tags import TAG_RAY_CLUSTER_NAME
 from ray.autoscaler._private.cli_logger import cli_logger
 
 logger = logging.getLogger(__name__)
 
 MAX_TAG_RETRIES = 3
+WAIT_POD_INTERVAL = 5 # seconds
 DELAY_BEFORE_TAG_RETRY = 0.5
 log_prefix = "KubernetesNodeProvider: "
 
+_configured = False
+_core_api = None
 def _load_config():
     global _configured
     if _configured:
@@ -36,7 +40,6 @@ def _load_config():
     except ConfigException:
         kubernetes.config.load_kube_config()
     _configured = True
-
 
 def core_api():
     global _core_api
@@ -55,26 +58,31 @@ def to_label_selector(tags):
     return label_selector
 
 class K8sNode:
-    """Slurm node sub-NodeProvider
+    """K8S sub-NodeProvider
 
-        This class contains the Slurm-specific part of NodeProvider 
-        for a multi-node type node provider. The Slurm related calls
+        This class contains the K8s-specific part of NodeProvider 
+        for a multi-node type node provider. The K8s related calls
         are forwarded to this class 
-
-        Note: The SlurmNode shares the same state file with the overall 
-        NodeProvider
-
     """
 
     def __init__(self, 
-        namespace: str
+        cluster_state: SlurmClusterState,
+        namespace: str,
+        cluster_name: str,
+        template_folder: str,
     ) -> None:
+        self.state = cluster_state # only for getting head info
         self.namespace = namespace
+        self.cluster_name = cluster_name
+        self.template_folder = template_folder
 
     def create_worker_node( # TODO: set memory constraint
         self, node_config: Dict[str, Any], tags: Dict[str, str], count: int
     ) -> Optional[Dict[str, Any]]:
         """Creates a worker node under Slurm
+
+        For the current implementation, each worker is distinguished by id and port
+        numbers in the config. So count == 1
 
         Args:
             node_config: the "node_config" section of specific node type (under
@@ -88,19 +96,17 @@ class K8sNode:
         """
 
         conf = copy.deepcopy(node_config)
-        
-        parsed_init_command = ""
-        if "init_commands" in conf:
-            for init in conf["init_commands"]:
-                parsed_init_command += init + "\n"
+        node_id = K8S_NODE_PREFIX + conf["id"]
 
-        pod_spec = conf.get("pod", conf)
-        service_spec = conf.get("service")
-        ingress_spec = conf.get("ingress")
-        node_uuid = str(uuid4())
+        # Read the pod template
+        with open(self.template_folder+"ray-worker-template.yaml", "r") as f:
+            pod_spec = yaml.safe_load(f)
+
+        # Update the worker yaml according to config
         tags[TAG_RAY_CLUSTER_NAME] = self.cluster_name
-        tags["ray-node-uuid"] = node_uuid
+        tags["ray-node-uuid"] = node_id
         pod_spec["metadata"]["namespace"] = self.namespace
+        pod_spec["metadata"]["name"] = node_id
         if "labels" in pod_spec["metadata"]:
             pod_spec["metadata"]["labels"].update(tags)
         else:
@@ -109,28 +115,61 @@ class K8sNode:
         logger.info(
             log_prefix + "calling create_namespaced_pod (count={}).".format(count)
         )
+            
+        pod = core_api().create_namespaced_pod(self.namespace, pod_spec)
 
-        # TODO: Add init command? Dynamic worker ports range?
-        new_nodes = []
-        for _ in range(count):
-            pod = core_api().create_namespaced_pod(self.namespace, pod_spec)
-            new_nodes.append(pod)
+        # Create the NodePort Service with node id as selector
+        with open(self.template_folder+"ray-worker-service-template.yaml", "r") as f:
+            service_spec = yaml.safe_load(f)
+        service_spec["metadata"]["name"] = node_id
+        service_spec["spec"]["selector"]["ray-node-uuid"] = node_id
+        
+        port_config = []
+        port_config.append({
+            "name": "node-manager-port", 
+            "port": conf["node-manager-port"],
+            "targetPort": conf["node-manager-port"],
+            "nodePort" : conf["node-manager-port"],
+        }) 
+        port_config.append({
+            "name": "object-manager-port", 
+            "port": conf["object-manager-port"],
+            "targetPort": conf["object-manager-port"],
+            "nodePort" : conf["object-manager-port"],
+        })
 
-        # new_svcs = []
-        # if service_spec is not None:
-        #     logger.info(
-        #         log_prefix + "calling create_namespaced_service "
-        #         "(count={}).".format(count)
-        #     )
+        for cur_port in range(conf["min-worker-port"], conf["max-worker-port"]+1):
+            port_config.append({
+                "name": "worker-port-"+str(cur_port), 
+                "port": cur_port,
+                "targetPort": cur_port,
+                "nodePort" : cur_port,
+            })    
 
-        #     for new_node in new_nodes:
+        service_spec["spec"]["ports"] = port_config
 
-        #         metadata = service_spec.get("metadata", {})
-        #         metadata["name"] = new_node.metadata.name
-        #         service_spec["metadata"] = metadata
-        #         service_spec["spec"]["selector"] = {"ray-node-uuid": node_uuid}
-        #         svc = core_api().create_namespaced_service(self.namespace, service_spec)
-        #         new_svcs.append(svc)
+        svc = core_api().create_namespaced_service(self.namespace, service_spec)
+
+        # Prepare for init command
+        meta_info = self.state.get_meta_info()
+        
+        # Wait until the pod is up
+        while not self.is_running(node_id):
+            time.sleep(WAIT_POD_INTERVAL)
+        node_ip = self.internal_ip(node_id)
+        assert node_ip != None
+
+        # Run init command
+        ray_start_command = "ray start"
+        ray_start_command += " --address=\"" + meta_info["head_ip"] + ":" + meta_info["gcs_port"] + "\""
+        ray_start_command += " --object-manager-port=" + conf["object-manager-port"]
+        ray_start_command += " --node-manager-port=" + conf["node-manager-port"]
+        ray_start_command += " --min-worker-port=" + conf["min-worker-port"]
+        ray_start_command += " --max-worker-port=" + conf["max-worker-port"]
+        ray_start_command += " --node-ip-address=\"" + node_ip + "\""
+        ray_start_command += " --redis-password=\"" + meta_info["redis_password"] + "\""
+
+        self.get_command_runner().run(ray_start_command)
 
 
     def get_command_runner(
@@ -173,7 +212,7 @@ class K8sNode:
 
         logger.info(log_prefix + "calling delete_namespaced_pod")
         try:
-            core_api().delete_namespaced_pod(node_id, self.namespace)
+            pod = core_api().delete_namespaced_pod(node_id, self.namespace)
         except ApiException as e:
             if e.status == 404:
                 logger.warning(
@@ -182,10 +221,10 @@ class K8sNode:
                 )
             else:
                 raise
-        # try: 
-        #     core_api().delete_namespaced_service(node_id, self.namespace)
-        # except ApiException:
-        #     pass
+        try: 
+            svc = core_api().delete_namespaced_service(node_id, self.namespace)
+        except ApiException:
+            pass
 
     
     def non_terminated_nodes(self, tag_filters: Dict[str, str]) -> List[str]:
@@ -270,4 +309,11 @@ class K8sNode:
     def internal_ip(self, node_id: str) -> Optional[str]:
         """Returns the internal ip (Ray ip) of the given node."""
         pod = core_api().read_namespaced_pod(node_id, self.namespace)
-        return pod.status.pod_ip # TODO:
+        node_addresses = core_api().read_node(pod.spec.node_name).status.addresses
+
+        for address in node_addresses:
+            if address.type == "ExternalIP":
+                return address.address
+        
+        return None
+

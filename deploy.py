@@ -58,6 +58,8 @@ if __name__ == "__main__":
         "slurm/cluster_state.py",
         "slurm/slurm_node.py",
         "slurm/cloud_k8s_node.py",
+        "slurm/template/ray-worker-template.yaml",
+        "slurm/template/ray-worker-service-template.yaml",
         RAY_SLURM_PATH
     ])
 

@@ -16,5 +16,9 @@ NODE_STATE_TERMINATED = "terminated"
 PASSWORD_LENGTH = 10
 WAIT_HEAD_INTEVAL = 5 # second
 
+BARE_NODE_TYPE_TAG = "BARE" # only for head outside slurm
+SLURM_NODE_TYPE_TAG = "SLURM"
+K8S_NODE_TYPE_TAG = "K8S"
+
 SLURM_NODE_PREFIX = "SLURM-"
-K8S_NODE_PREFIX = "K8S-"
+K8S_NODE_PREFIX = "k8s-ray-" # have to user lower case in k8s

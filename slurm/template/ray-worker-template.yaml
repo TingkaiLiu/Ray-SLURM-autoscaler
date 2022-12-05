@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ray-worker-template # will be replaced
+  labels:
+    # workerID: "1"
+    cloud_bursting: "1" # for anti-affinity
+spec:
+  containers:
+  - name: ray-worker
+    image: rayproject/ray:1.12.1
+    command: ["/bin/bash", "-c", "--"]
+    args: ['trap : TERM INT; sleep infinity & wait;']
+    # resources:
+    #   requests:
+    #     memory: "8G"
+    #     cpu: "2000m"
+    #   limits:
+    #     memory: "8G"
+    #     cpu: "2000m"
+  affinity:
+    podAntiAffinity: # Ray cluster pods should not run on same node to avoid port conflict
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: cloud_bursting
+            operator: In
+            values:
+            - "1"
+        topologyKey: kubernetes.io/hostname

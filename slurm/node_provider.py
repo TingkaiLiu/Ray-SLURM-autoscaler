@@ -21,6 +21,7 @@ from ray.autoscaler._private.slurm.empty_command_runner import EmptyCommandRunne
 from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
 
 from ray.autoscaler._private.slurm.slurm_node import SlurmNode
+from ray.autoscaler._private.slurm.slurm_node import K8sNode
 
 
 from ray.autoscaler._private.slurm import (
@@ -28,9 +29,11 @@ from ray.autoscaler._private.slurm import (
     NODE_STATE_PENDING,
     NODE_STATE_TERMINATED,
     PASSWORD_LENGTH,
-    WAIT_HEAD_INTEVAL,
     SLURM_NODE_PREFIX,
-    K8S_NODE_PREFIX
+    K8S_NODE_PREFIX,
+    BARE_NODE_TYPE_TAG,
+    SLURM_NODE_TYPE_TAG,
+    K8S_NODE_TYPE_TAG
 )
 
 from threading import RLock # reentrant lock
@@ -228,6 +231,7 @@ class NodeProvider:
 
         # Sub-node providers
         self.slurm_node = SlurmNode(self.state, self.template_folder, self.temp_folder)
+        self.k8s_node = K8sNode(self.state, provider_config["k8s_namespace"], self.cluster_name, self.template_folder)
     
     @staticmethod
     def bootstrap_config(cluster_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -302,116 +306,108 @@ class NodeProvider:
         # LTK's note: node_config only contains the "node_cofig" filed of a specific node type
         current_conf = copy.deepcopy(node_config)
 
-        if "head_node" not in current_conf:
-            is_head_node = False
-        else:
-            is_head_node = current_conf["head_node"] == 1
-
-        if is_head_node and count != 1:
-            raise ValueError("Cannot create more than one head")
-        
-        under_slurm = False
-        if "under_slurm" in current_conf:
-            under_slurm = current_conf["under_slurm"] == 1
-        else:
-            if is_head_node:
-                under_slurm = HEAD_UNDER_SLURM
+        if current_conf["node_type"] == SLURM_NODE_TYPE_TAG:
+            if "head_node" not in current_conf:
+                is_head_node = False
             else:
-                under_slurm = WORKER_UNDER_SLURM
+                is_head_node = current_conf["head_node"] == 1
 
-
-        if is_head_node:
-
-            redis_password = ''.join(random.choices(string.ascii_uppercase + string.digits, k=PASSWORD_LENGTH))
-
-            if under_slurm: # head node under slurm. Assume all ports are available
+            if is_head_node:
+                if count != 1:
+                    raise ValueError("Cannot create more than one head")
+            
+                redis_password = ''.join(random.choices(string.ascii_uppercase + string.digits, k=PASSWORD_LENGTH))
                 
                 self.slurm_node.create_head_node(
                     current_conf, tags, redis_password,
                     self.gcs_port, self.ray_client_port, self.dashboard_port
                 )
+            else:
+                self.slurm_node.create_worker_node(current_conf, tags, count)
 
-            else: 
-                
-                parsed_init_command = ""
-                if "init_commands" in current_conf:
-                    for init in current_conf["init_commands"]:
-                        parsed_init_command += init + "\n"
-                
-                parsed_add_slurm_command = ""
-                if "additional_slurm_commands" in current_conf:
-                    for cmd in current_conf["additional_slurm_commands"]:
-                        parsed_add_slurm_command += cmd + "\n"
+        elif current_conf["node_type"] == K8S_NODE_TYPE_TAG:
+            self.k8s_node.create_worker_node(current_conf, tags, count)
 
-                if "head_ip" in current_conf:
-                    head_ip = current_conf["head_ip"]
-                else:
-                    head_ip = socket.gethostbyname(socket.gethostname())
-           
-                # Test whether the given port is free. If not, get new free ports
-                ray_ports = [self.gcs_port, self.ray_client_port, self.dashboard_port]
-                replace_index = [] # the index of the busy ports to be replaced
+        elif current_conf["node_type"] == BARE_NODE_TYPE_TAG:
+  
+            parsed_init_command = ""
+            if "init_commands" in current_conf:
+                for init in current_conf["init_commands"]:
+                    parsed_init_command += init + "\n"
+            
+            parsed_add_slurm_command = ""
+            if "additional_slurm_commands" in current_conf:
+                for cmd in current_conf["additional_slurm_commands"]:
+                    parsed_add_slurm_command += cmd + "\n"
 
-                for i in range(len(ray_ports)):
-                    if not _test_free_port(head_ip, int(ray_ports[i])):
-                        cli_logger.warning("Port %s is not free. Replaced." % ray_ports[i])
-                        replace_index.append(i)
+            if "head_ip" in current_conf:
+                head_ip = current_conf["head_ip"]
+            else:
+                head_ip = socket.gethostbyname(socket.gethostname())
+        
+            # Test whether the given port is free. If not, get new free ports
+            ray_ports = [self.gcs_port, self.ray_client_port, self.dashboard_port]
+            replace_index = [] # the index of the busy ports to be replaced
 
-                free_ports = _get_free_ports_range(head_ip, PORT_LOWER_BOUND, PORT_HIGHER_BOUND, len(replace_index))
-                for i in range(len(replace_index)):
-                    ray_ports[replace_index[i]] = str(free_ports[i])
-                
-                # Fill the launching file
-                f = open(self.template_folder+"head.sh", "r")
-                template = f.read()
-                f.close()
-                
-                template = template.replace("[_PY_HEAD_NODE_IP_]", head_ip)
-                template = template.replace("[_PY_PORT_]", ray_ports[0])
-                template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
-                template = template.replace("[_PY_RAY_CLIENT_PORT_]", ray_ports[1])
-                template = template.replace("[_PY_DASHBOARD_PORT_]", ray_ports[2])
-                template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
+            for i in range(len(ray_ports)):
+                if not _test_free_port(head_ip, int(ray_ports[i])):
+                    cli_logger.warning("Port %s is not free. Replaced." % ray_ports[i])
+                    replace_index.append(i)
 
-                f = open(self.temp_folder+"/head.sh", "w")
-                f.write(template)
-                f.close()
+            free_ports = _get_free_ports_range(head_ip, PORT_LOWER_BOUND, PORT_HIGHER_BOUND, len(replace_index))
+            for i in range(len(replace_index)):
+                ray_ports[replace_index[i]] = str(free_ports[i])
+            
+            # Fill the launching file
+            f = open(self.template_folder+"head.sh", "r")
+            template = f.read()
+            f.close()
+            
+            template = template.replace("[_PY_HEAD_NODE_IP_]", head_ip)
+            template = template.replace("[_PY_PORT_]", ray_ports[0])
+            template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
+            template = template.replace("[_PY_RAY_CLIENT_PORT_]", ray_ports[1])
+            template = template.replace("[_PY_DASHBOARD_PORT_]", ray_ports[2])
+            template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
-                node_info = {}
-                node_info["state"] = NODE_STATE_RUNNING
-                node_info["tags"] = tags
+            f = open(self.temp_folder+"/head.sh", "w")
+            f.write(template)
+            f.close()
 
-                meta_info = {}
-                meta_info["head_ip"] = head_ip
-                meta_info["head_id"] = HEAD_NODE_ID_OUTSIDE_SLURM
-                meta_info["gcs_port"] = ray_ports[0]
-                meta_info["client_port"] = ray_ports[1]
-                meta_info["dashboard_port"] = ray_ports[2]
-                meta_info["redis_password"] = redis_password
+            node_info = {}
+            node_info["state"] = NODE_STATE_RUNNING
+            node_info["tags"] = tags
 
-                with self.state.lock:
-                    with self.state.file_lock:
-                        subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
-                        
-                        self.state.put_node(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
-                        self.state.put_meta_info(meta_info) 
+            meta_info = {}
+            meta_info["head_ip"] = head_ip
+            meta_info["head_id"] = HEAD_NODE_ID_OUTSIDE_SLURM
+            meta_info["gcs_port"] = ray_ports[0]
+            meta_info["client_port"] = ray_ports[1]
+            meta_info["dashboard_port"] = ray_ports[2]
+            meta_info["redis_password"] = redis_password
 
-                self._internal_ip_cache[head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
+            with self.state.lock:
+                with self.state.file_lock:
+                    subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
+                    
+                    self.state.put_node(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
+                    self.state.put_meta_info(meta_info) 
 
-                # Prepare the script for terminating node
-                f = open(self.template_folder+"end_head.sh", "r")
-                template = f.read()
-                f.close()
-                
-                template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
+            self._internal_ip_cache[head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
 
-                f = open(self.temp_folder+"/end_head.sh", "w")
-                f.write(template)
-                f.close()
+            # Prepare the script for terminating node
+            f = open(self.template_folder+"end_head.sh", "r")
+            template = f.read()
+            f.close()
+            
+            template = template.replace("[_PY_INIT_COMMAND_]", parsed_init_command)
+
+            f = open(self.temp_folder+"/end_head.sh", "w")
+            f.write(template)
+            f.close()
 
         else: 
-            # worker node should under slurm
-            self.slurm_node.create_worker_node(current_conf, tags, count)
+            cli_logger.warning("Unkown node type for create_node: %s\n" % current_conf["node_type"])
 
 
     def create_node_with_resources(
@@ -484,6 +480,16 @@ class NodeProvider:
                 use_internal_ip,
                 docker_config
             )
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            return self.k8s_node.get_command_runner(
+                log_prefix,
+                node_id,
+                auth_config,
+                cluster_name,
+                process_runner,
+                use_internal_ip,
+                docker_config
+            )
 
     def terminate_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Terminates the specified node.
@@ -499,6 +505,8 @@ class NodeProvider:
                     self.state.delete_node(node_id)  
         elif node_id.startswith(SLURM_NODE_PREFIX):
             self.slurm_node.terminate_node(node_id)
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            self.k8s_node.terminate_node(node_id)
 
         head_id = self.state.get_head_id()
         if node_id == head_id:
@@ -548,6 +556,7 @@ class NodeProvider:
         
         # Combine with the nodes from sub node providers
         matching_ids.extend(self.slurm_node.non_terminated_nodes(tag_filters))
+        matching_ids.extend(self.k8s_node.non_terminated_nodes(tag_filters))
 
         return matching_ids
 
@@ -558,6 +567,8 @@ class NodeProvider:
             return True # TODO:  
         elif node_id.startswith(SLURM_NODE_PREFIX):
             return self.slurm_node.is_running(node_id)
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            return self.k8s_node.is_running(node_id)
 
     def is_terminated(self, node_id: str) -> bool:
         """Return whether the specified node is terminated."""
@@ -565,6 +576,8 @@ class NodeProvider:
             return False # TODO:
         elif node_id.startswith(SLURM_NODE_PREFIX):
             return self.slurm_node.is_terminated(node_id)
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            return self.k8s_node.is_terminated(node_id)
     
     def set_node_tags(self, node_id: str, tags: Dict[str, str]) -> None:
         """Sets the tag values (string dict) for the specified node."""
@@ -580,6 +593,8 @@ class NodeProvider:
             cli_logger.warning("Set tags is called non-exsiting node\n")
         elif node_id.startswith(SLURM_NODE_PREFIX):
             self.slurm_node.set_node_tags(node_id, tags)
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            self.k8s_node.set_node_tags(node_id, tags)
 
     def node_tags(self, node_id: str) -> Dict[str, str]:
         """Returns the tags of the given node (string dict)."""
@@ -593,6 +608,8 @@ class NodeProvider:
                 return {}
         elif node_id.startswith(SLURM_NODE_PREFIX):
             return self.slurm_node.node_tags(node_id)
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            return self.k8s_node.node_tags(node_id)
 
     def external_ip(self, node_id: str) -> Optional[str]:
         """Returns the external ip of the given node."""
@@ -604,6 +621,8 @@ class NodeProvider:
             return self.state.get_head_ip()
         elif node_id.startswith(SLURM_NODE_PREFIX):
             return self.slurm_node.internal_ip(node_id)
+        elif node_id.startswith(K8S_NODE_PREFIX):
+            return self.k8s_node.internal_ip(node_id)
 
     def get_node_id(self, ip_address: str, use_internal_ip: bool = True) -> str:
         """Returns the node_id given an IP address.

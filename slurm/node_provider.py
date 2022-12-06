@@ -21,7 +21,7 @@ from ray.autoscaler._private.slurm.empty_command_runner import EmptyCommandRunne
 from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
 
 from ray.autoscaler._private.slurm.slurm_node import SlurmNode
-from ray.autoscaler._private.slurm.slurm_node import K8sNode
+from ray.autoscaler._private.slurm.cloud_k8s_node import K8sNode
 
 
 from ray.autoscaler._private.slurm import (
@@ -36,8 +36,6 @@ from ray.autoscaler._private.slurm import (
     K8S_NODE_TYPE_TAG
 )
 
-from threading import RLock # reentrant lock
-from filelock import FileLock # reentrant (recursive) lock
 
 from ray.autoscaler._private.cli_logger import cli_logger
 
@@ -54,8 +52,6 @@ DEFAULT_TEMP_FOLDER_NAME = "temp_script"
 PORT_LOWER_BOUND = 20000
 PORT_HIGHER_BOUND = 30000
 
-filelock_logger = logging.getLogger("filelock")
-filelock_logger.setLevel(logging.WARNING)
 
 ''' Heler functions '''
 
@@ -329,6 +325,8 @@ class NodeProvider:
             self.k8s_node.create_worker_node(current_conf, tags, count)
 
         elif current_conf["node_type"] == BARE_NODE_TYPE_TAG:
+
+            redis_password = ''.join(random.choices(string.ascii_uppercase + string.digits, k=PASSWORD_LENGTH))
   
             parsed_init_command = ""
             if "init_commands" in current_conf:
@@ -482,13 +480,13 @@ class NodeProvider:
             )
         elif node_id.startswith(K8S_NODE_PREFIX):
             return self.k8s_node.get_command_runner(
-                log_prefix,
-                node_id,
-                auth_config,
-                cluster_name,
-                process_runner,
-                use_internal_ip,
-                docker_config
+                log_prefix=log_prefix,
+                node_id=node_id,
+                auth_config=auth_config,
+                cluster_name=cluster_name,
+                process_runner=process_runner,
+                use_internal_ip=use_internal_ip,
+                docker_config=docker_config
             )
 
     def terminate_node(self, node_id: str) -> Optional[Dict[str, Any]]:

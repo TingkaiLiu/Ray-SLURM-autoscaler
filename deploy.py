@@ -21,7 +21,7 @@ MAX_SLURM_JOB_TIME = "01:30:00"
 
 HEAD_NODE_CPUS = "1"
 HEAD_NODE_GPUS = "0"
-WORKER_NODE_CPUS = "1"
+WORKER_NODE_CPUS = "10"
 WORKER_NODE_GPUS = "0"
 
 ''' End of fields to be filled '''
@@ -58,9 +58,14 @@ if __name__ == "__main__":
         "slurm/cluster_state.py",
         "slurm/slurm_node.py",
         "slurm/cloud_k8s_node.py",
+        RAY_SLURM_PATH
+    ])
+
+    subprocess.run([
+        "cp", 
         "slurm/template/ray-worker-template.yaml",
         "slurm/template/ray-worker-service-template.yaml",
-        RAY_SLURM_PATH
+        TEMPLATE_PATH
     ])
 
     subprocess.run(["cp", "slurm/template/end_head.sh", TEMPLATE_PATH])

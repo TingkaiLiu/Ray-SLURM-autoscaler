@@ -8,6 +8,7 @@ import copy
 import logging
 import time
 import yaml
+import subprocess
 
 from ray.autoscaler._private.slurm import (
     K8S_NODE_PREFIX
@@ -162,15 +163,16 @@ class K8sNode:
         # Run init command
         ray_start_command = "ray start"
         ray_start_command += " --address=\"" + meta_info["head_ip"] + ":" + meta_info["gcs_port"] + "\""
-        ray_start_command += " --object-manager-port=" + conf["object-manager-port"]
-        ray_start_command += " --node-manager-port=" + conf["node-manager-port"]
-        ray_start_command += " --min-worker-port=" + conf["min-worker-port"]
-        ray_start_command += " --max-worker-port=" + conf["max-worker-port"]
+        ray_start_command += " --object-manager-port=" + str(conf["object-manager-port"])
+        ray_start_command += " --node-manager-port=" + str(conf["node-manager-port"])
+        ray_start_command += " --min-worker-port=" + str(conf["min-worker-port"])
+        ray_start_command += " --max-worker-port=" + str(conf["max-worker-port"])
         ray_start_command += " --node-ip-address=\"" + node_ip + "\""
         ray_start_command += " --redis-password=\"" + meta_info["redis_password"] + "\""
 
-        self.get_command_runner().run(ray_start_command)
-
+        logger.info("Run init command\n")
+        self.get_command_runner("k8s create:", node_id, {}, self.cluster_name, subprocess, True).run(ray_start_command)
+        
 
     def get_command_runner(
         self,
@@ -198,8 +200,17 @@ class K8sNode:
             docker_config(dict): If set, the docker information of the docker
                 container that commands should be run on.
         """
+
+        logger.info(
+            log_prefix + "calling get_command_runner (id={}, namespace={}).".format(node_id, self.namespace)
+        )
+
         return KubernetesCommandRunner(
-            log_prefix, self.namespace, node_id, auth_config, process_runner
+            log_prefix=log_prefix, 
+            namespace=self.namespace, 
+            node_id=node_id, 
+            auth_config=auth_config, 
+            process_runner=process_runner
         )
 
 
@@ -221,6 +232,7 @@ class K8sNode:
                 )
             else:
                 raise
+        logger.info(log_prefix + "calling delete_namespaced_service")
         try: 
             svc = core_api().delete_namespaced_service(node_id, self.namespace)
         except ApiException:

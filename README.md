@@ -4,16 +4,17 @@
 > Date: Aug 26, 2022
 
 
-# Ray-SLURM-autoscaler
+# Ray-SLURM-autoscaler + K8s Cloud bursting
 
-This repo includes the SLURM NodeProvider implementation for Ray. With this side-package, the Ray cluster launcher can be used on a SLURM based cluster, where each "node" in the Ray cluster corresponds to a SLURM batch job submission. Furthermore, the Ray autoscaler can also be utilized based on the autoscaler config yaml, where Ray will add more nodes (submit more SLURM batch jobs) when the demand is not satisfied, and remove nodes (cancel SLURM jobs) after the resource is idle for certain time. 
+(The K8s Cloud part of the document is still in progress)
+
+This repo includes the SLURM NodeProvider implementation for Ray with K8s Cloud bursting capability. With this side-package, the Ray cluster launcher can be used on a SLURM based cluster, where each "node" in the Ray cluster corresponds to a SLURM batch job submission. Furthermore, the Ray autoscaler can also be utilized based on the autoscaler config yaml, where Ray will add more nodes (submit more SLURM batch jobs) when the demand is not satisfied, and remove nodes (cancel SLURM jobs) after the resource is idle for certain time. 
 
 This package provides supports for two scenarios:
 
 - The head node of the Ray cluster is outside of SLURM (i.e. on the login node of the cluster). This is useful when users want to connect to the Ray cluster remotely (using Ray client, for example), while the compute nodes of the cluster are not directly reachable from outside of the cluster. In such cases, it is recommended to set the CPU and GPU resource of the Ray head node to be 0, since the login node is not supposed to be used for computation. 
 
 - The head node of the Ray cluster is under SLURM. This is useful when users are only using the Ray cluster when logging into the compute cluster, and want to avoid conflict with other users on the same cluster.  
-
 
 # Deployment guide
 

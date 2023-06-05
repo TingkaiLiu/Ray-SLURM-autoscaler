@@ -76,6 +76,12 @@ class K8sNode:
         self.namespace = namespace
         self.cluster_name = cluster_name
         self.template_folder = template_folder
+        self.valid = True
+
+        try:
+            core_api()
+        except Exception:
+            self.valid = False
 
     def create_worker_node( # TODO: set memory constraint
         self, node_config: Dict[str, Any], tags: Dict[str, str], count: int

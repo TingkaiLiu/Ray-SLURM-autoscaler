@@ -1,0 +1,28 @@
+#!/bin/bash -l
+
+#BSUB -n [_DEPLOY_WORKER_CPUS_]   
+#BSUB -R "select[gpu=[_DEPLOY_WORKER_GPUS_]]"
+
+#BSUB -R "span[ptile=1]"  
+#BSUB -W [_DEPLOY_LSF_JOB_TIME_]     
+#BSUB -x            
+
+
+[_PY_ADD_LSF_CMD_]
+
+set -x
+
+ip_head="[_PY_IP_HEAD_]" # To be replaced by python laucher
+password="[_PY_REDIS_PASSWORD_]"
+
+[_PY_INIT_COMMAND_] # To be replaced by python laucher
+
+echo "Starting WORKER"
+ray start --address "$ip_head" \
+    --num-cpus "$LSB_DJOB_NUMPROC" --num-gpus "$LSB_DJOB_NUMGRES" \
+    --redis-password="$password" --block &
+
+# __doc_worker_ray_end__
+
+sleep infinity # wait forever to presist the ray runtime
+

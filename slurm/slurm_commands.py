@@ -1,6 +1,8 @@
 
 '''Slurm Command interfaces
 
+Not used in this branch
+
 Created by Tingkai Liu (tingkai2@illinois.edu) on June 17, 2022
 
 '''

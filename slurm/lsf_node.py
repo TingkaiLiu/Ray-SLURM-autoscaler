@@ -1,7 +1,3 @@
-'''
-Not used in this branch
-'''
-
 from typing import Any, Dict, List, Optional
 from types import ModuleType
 import copy
@@ -13,41 +9,41 @@ from ray.autoscaler._private.slurm import (
     NODE_STATE_TERMINATED,
     PASSWORD_LENGTH,
     WAIT_HEAD_INTEVAL,
-    SLURM_NODE_PREFIX
+    LSF_NODE_PREFIX
 )
 from ray.autoscaler.command_runner import CommandRunnerInterface
 from ray.autoscaler._private.slurm.empty_command_runner import EmptyCommandRunner
-from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
+from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState 
 
-from ray.autoscaler._private.slurm.slurm_commands import (
-    slurm_cancel_job,
-    slurm_launch_head,
-    slurm_launch_worker,
-    slurm_get_job_ip,
-    slurm_get_job_status,
-    SLURM_JOB_RUNNING,
-    SLURM_JOB_PENDING,
-    SLURM_JOB_NOT_EXIST
+from ray.autoscaler._private.slurm.lsf_commands import (
+    lsf_cancel_job,
+    lsf_launch_head,
+    lsf_launch_worker,
+    lsf_get_job_ip,
+    lsf_get_job_status,
+    LSF_JOB_RUNNING,
+    LSF_JOB_PENDING,
+    LSF_JOB_NOT_EXIST
 )
 
-# Map slurm job status to node states
-SLURM_JOB_TRANS_MAP = {
-    SLURM_JOB_RUNNING : NODE_STATE_RUNNING,
-    SLURM_JOB_PENDING : NODE_STATE_PENDING,
-    SLURM_JOB_NOT_EXIST : NODE_STATE_TERMINATED
+# Map lsf job status to node states
+LSF_JOB_TRANS_MAP = {
+    LSF_JOB_RUNNING : NODE_STATE_RUNNING,
+    LSF_JOB_PENDING : NODE_STATE_PENDING,
+    LSF_JOB_NOT_EXIST : NODE_STATE_TERMINATED
 }
 
 
 from ray.autoscaler._private.cli_logger import cli_logger
 
-class SlurmNode:
-    """Slurm node sub-NodeProvider
+class LSFNode:
+    """LSF node sub-NodeProvider
 
-        This class contains the Slurm-specific part of NodeProvider 
-        for a multi-node type node provider. The Slurm related calls
+        This class contains the LSF-specific part of NodeProvider 
+        for a multi-node type node provider. The LSF related calls
         are forwarded to this class 
 
-        Note: The SlurmNode shares the same state file with the overall 
+        Note: The LSFNode shares the same state file with the overall 
         NodeProvider
 
     """
@@ -65,7 +61,7 @@ class SlurmNode:
         self, node_config: Dict[str, Any], tags: Dict[str, str], redis_password: str,
         gcs_port: str, ray_client_port: str, dashboard_port: str
     ) -> Optional[Dict[str, Any]]:
-        """Creates a head node under Slurm
+        """Creates a head node under LSF
 
         Args:
             node_config: the "node_config" section of specific node type (under
@@ -86,12 +82,12 @@ class SlurmNode:
             for init in current_conf["init_commands"]:
                 parsed_init_command += init + "\n"
         
-        parsed_add_slurm_command = ""
-        if "additional_slurm_commands" in current_conf:
-            for cmd in current_conf["additional_slurm_commands"]:
-                parsed_add_slurm_command += cmd + "\n"
+        parsed_add_lsf_command = ""
+        if "additional_lsf_commands" in current_conf: # TODO: Add in yaml
+            for cmd in current_conf["additional_lsf_commands"]:
+                parsed_add_lsf_command += cmd + "\n"
 
-        # Head node under slurm. Assume all ports are available
+        # Head node under lsf. Assume all ports are available
             
         node_info = {}
         node_info["state"] = NODE_STATE_PENDING
@@ -107,7 +103,7 @@ class SlurmNode:
 
         with self.state.lock:
             with self.state.file_lock:
-                node_id = slurm_launch_head(
+                node_id = lsf_launch_head(
                     self.template_folder,
                     self.temp_folder, 
                     gcs_port,
@@ -115,7 +111,7 @@ class SlurmNode:
                     dashboard_port,
                     redis_password,
                     parsed_init_command,
-                    parsed_add_slurm_command
+                    parsed_add_lsf_command
                 )
 
                 meta_info["head_id"] = node_id
@@ -128,10 +124,10 @@ class SlurmNode:
         cli_logger.warning("Waiting for the head to start...This can be block due to resource limit")
         cli_logger.warning("If you force quit here, please run 'ray down <cluster_config>.ymal afterward to clean up")
         
-        while slurm_get_job_status(node_id) != SLURM_JOB_RUNNING:
+        while lsf_get_job_status(node_id) != LSF_JOB_RUNNING:
             time.sleep(WAIT_HEAD_INTEVAL)
 
-        head_ip = slurm_get_job_ip(node_id)
+        head_ip = lsf_get_job_ip(node_id)
         meta_info["head_ip"] = head_ip
         self.state.put_meta_info(meta_info)
 
@@ -149,7 +145,7 @@ class SlurmNode:
     def create_worker_node( # TODO: set memory constraint
         self, node_config: Dict[str, Any], tags: Dict[str, str], count: int
     ) -> Optional[Dict[str, Any]]:
-        """Creates a worker node under Slurm
+        """Creates a worker node under LSF
 
         Args:
             node_config: the "node_config" section of specific node type (under
@@ -169,10 +165,10 @@ class SlurmNode:
             for init in current_conf["init_commands"]:
                 parsed_init_command += init + "\n"
         
-        parsed_add_slurm_command = ""
-        if "additional_slurm_commands" in current_conf:
-            for cmd in current_conf["additional_slurm_commands"]:
-                parsed_add_slurm_command += cmd + "\n"
+        parsed_add_lsf_command = ""
+        if "additional_lsf_commands" in current_conf:
+            for cmd in current_conf["additional_lsf_commands"]:
+                parsed_add_lsf_command += cmd + "\n"
 
         '''
             Since worker node is started by the autoscaler thread
@@ -200,13 +196,13 @@ class SlurmNode:
             with self.state.lock:
                 with self.state.file_lock:
                     
-                    node_id = slurm_launch_worker(
+                    node_id = lsf_launch_worker(
                         self.template_folder,
                         self.temp_folder,
                         head_ip+":"+meta_info["gcs_port"],
                         meta_info["redis_password"],
                         parsed_init_command,
-                        parsed_add_slurm_command
+                        parsed_add_lsf_command
                     )
 
                     # Store pending info: will be updated by non_terminate_node
@@ -247,13 +243,13 @@ class SlurmNode:
             "cluster_name": cluster_name,
             "process_runner": process_runner,
             "use_internal_ip": use_internal_ip,
-            "under_slurm" : True,
+            "under_lsf" : True,
         }
         return EmptyCommandRunner(**common_args)  
 
 
     def terminate_node(self, node_id: str) -> Optional[Dict[str, Any]]:
-        """Terminates a node under Slurm.
+        """Terminates a node under LSF.
 
         Optionally return a mapping from deleted node ids to node
         metadata.
@@ -267,7 +263,7 @@ class SlurmNode:
         with self.state.lock:
             with self.state.file_lock:
 
-                slurm_cancel_job(node_id)
+                lsf_cancel_job(node_id)
                 self.state.delete_node(node_id)
     
     def non_terminated_nodes(self, tag_filters: Dict[str, str]) -> List[str]:
@@ -279,7 +275,7 @@ class SlurmNode:
         (e.g. is_running(node_id)). This means that non_terminate_nodes() must
         be called again to refresh results.
 
-        The node states on file will be updated by checking the slurm job status.
+        The node states on file will be updated by checking the LSF job status.
         Other node information on file remains unchanged
         """
 
@@ -287,11 +283,11 @@ class SlurmNode:
         matching_ids = []
         for worker_id, info in workers.items():
             
-            if worker_id.startswith(SLURM_NODE_PREFIX):
+            if worker_id.startswith(LSF_NODE_PREFIX):
                 # Update node status
-                slurm_job_status = slurm_get_job_status(worker_id)
-                if SLURM_JOB_TRANS_MAP[slurm_job_status] != info["state"]:
-                    info["state"] = SLURM_JOB_TRANS_MAP[slurm_job_status]
+                lsf_job_status = lsf_get_job_status(worker_id)
+                if LSF_JOB_TRANS_MAP[lsf_job_status] != info["state"]:
+                    info["state"] = LSF_JOB_TRANS_MAP[lsf_job_status]
                     if info["state"] == NODE_STATE_TERMINATED:
                         self.state.delete_node(worker_id)
                     else:
@@ -312,11 +308,11 @@ class SlurmNode:
 
     def is_running(self, node_id: str) -> bool:
         """Return whether the specified node under slur is running."""
-        return slurm_get_job_status(node_id) == SLURM_JOB_RUNNING
+        return lsf_get_job_status(node_id) == LSF_JOB_RUNNING
     
     def is_terminated(self, node_id: str) -> bool:
         """Return whether the specified node is terminated."""
-        return slurm_get_job_status(node_id) == SLURM_JOB_NOT_EXIST
+        return lsf_get_job_status(node_id) == LSF_JOB_NOT_EXIST
 
     def set_node_tags(self, node_id: str, tags: Dict[str, str]) -> None:
         """Sets the tag values (string dict) for the specified node."""
@@ -342,4 +338,4 @@ class SlurmNode:
     
     def internal_ip(self, node_id: str) -> Optional[str]:
         """Returns the internal ip (Ray ip) of the given node."""
-        return slurm_get_job_ip(node_id)
+        return lsf_get_job_ip(node_id)

@@ -1,6 +1,6 @@
 '''Empty command runner that only prints the command
 
-Mainly use by slurm node provider---all the init commands are run when creating the node
+Mainly use by lsf node provider---all the init commands are run when creating the node
 so the command runner is no longer needed / capable
 
 Created by Tingkai Liu (tingkai2@illinois.edu) on June 17, 2022
@@ -12,9 +12,9 @@ from typing import Any, List, Tuple, Dict, Optional
 from ray.autoscaler._private.cli_logger import cli_logger
 import os
 
-from ray.autoscaler._private.slurm.slurm_commands import (
-    slurm_get_job_status,
-    SLURM_JOB_RUNNING,
+from ray.autoscaler._private.slurm.lsf_commands import (
+    lsf_get_job_status,
+    LSF_JOB_RUNNING,
 )
 
 class EmptyCommandRunner(CommandRunnerInterface):
@@ -37,7 +37,7 @@ class EmptyCommandRunner(CommandRunnerInterface):
         cluster_name,
         process_runner,
         use_internal_ip,
-        under_slurm: bool,
+        under_lsf: bool,
     ):
         self.cluster_name = cluster_name
         self.log_prefix = log_prefix
@@ -45,7 +45,7 @@ class EmptyCommandRunner(CommandRunnerInterface):
         self.node_id = node_id
         self.use_internal_ip = use_internal_ip
         self.provider = provider
-        self.under_slurm = under_slurm
+        self.under_lsf = under_lsf
         # self.ssh_private_key = auth_config.get("ssh_private_key")
         # self.ssh_user = auth_config["ssh_user"]
         # self.ssh_control_path = ssh_control_path
@@ -91,8 +91,8 @@ class EmptyCommandRunner(CommandRunnerInterface):
             after executing the command with `sudo shutdown -h now`.
         """
 
-        if self.under_slurm:
-            if slurm_get_job_status(self.node_id) != SLURM_JOB_RUNNING:
+        if self.under_lsf:
+            if lsf_get_job_status(self.node_id) != LSF_JOB_RUNNING:
                 raise Exception("Node {} is not ready".format(self.node_id))
 
         cli_logger.warning("The empty command runner is called with {}\n", cmd)
@@ -103,15 +103,15 @@ class EmptyCommandRunner(CommandRunnerInterface):
     ) -> None:
         """Rsync files up to the cluster node.
 
-        Since all nodes on slurm shares a file system, this function simplily does direct copying
+        Since all nodes on lsf shares a file system, this function simplily does direct copying
 
         Args:
             source: The (local) source directory or file.
             target: The (remote) destination path.
         """
 
-        if self.under_slurm:
-            if slurm_get_job_status(self.node_id) != SLURM_JOB_RUNNING:
+        if self.under_lsf:
+            if lsf_get_job_status(self.node_id) != LSF_JOB_RUNNING:
                 raise Exception("Node {} is not ready".format(self.node_id))
 
         cli_logger.warning("The empty rsync up is called: {} to {}\n", source, target)
@@ -123,15 +123,15 @@ class EmptyCommandRunner(CommandRunnerInterface):
     ) -> None:
         """Rsync files down from the cluster node.
 
-        Since all nodes on slurm shares a file system, this function simplily does direct copying
+        Since all nodes on lsf shares a file system, this function simplily does direct copying
 
         Args:
             source: The (remote) source directory or file.
             target: The (local) destination path.
         """
 
-        if self.under_slurm:
-            if slurm_get_job_status(self.node_id) != SLURM_JOB_RUNNING:
+        if self.under_lsf:
+            if lsf_get_job_status(self.node_id) != LSF_JOB_RUNNING:
                 raise Exception("Node {} is not ready".format(self.node_id))
 
         cli_logger.warning("The empty rsync down is called: {} to {}\n", source, target)

@@ -20,7 +20,7 @@ from ray.autoscaler.command_runner import CommandRunnerInterface
 from ray.autoscaler._private.slurm.empty_command_runner import EmptyCommandRunner
 from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
 
-from ray.autoscaler._private.slurm.slurm_node import SlurmNode
+from ray.autoscaler._private.slurm.lsf_node import LSFNode
 from ray.autoscaler._private.slurm.cloud_k8s_node import K8sNode
 
 
@@ -29,10 +29,10 @@ from ray.autoscaler._private.slurm import (
     NODE_STATE_PENDING,
     NODE_STATE_TERMINATED,
     PASSWORD_LENGTH,
-    SLURM_NODE_PREFIX,
+    LSF_NODE_PREFIX,
     K8S_NODE_PREFIX,
     BARE_NODE_TYPE_TAG,
-    SLURM_NODE_TYPE_TAG,
+    LSF_NODE_TYPE_TAG,
     K8S_NODE_TYPE_TAG
 )
 
@@ -41,11 +41,11 @@ from ray.autoscaler._private.cli_logger import cli_logger
 
 logger = logging.getLogger(__name__)
 
-HEAD_NODE_ID_OUTSIDE_SLURM = "-1" # TODO: Pid? 
+HEAD_NODE_ID_OUTSIDE_LSF = "-1" # TODO: Pid? 
 
 # Default values if not provided in the node config
-HEAD_UNDER_SLURM = False
-WORKER_UNDER_SLURM = True
+# HEAD_UNDER_LSF = False
+# WORKER_UNDER_LSF = True
 DEFAULT_TEMP_FOLDER_NAME = "temp_script"
 
 # The range for getting free ports
@@ -226,8 +226,11 @@ class NodeProvider:
         )
 
         # Sub-node providers
-        self.slurm_node = SlurmNode(self.state, self.template_folder, self.temp_folder)
+        self.lsf_node = LSFNode(self.state, self.template_folder, self.temp_folder)
+
         self.k8s_node = K8sNode(self.state, provider_config["k8s_namespace"], self.cluster_name, self.template_folder)
+        if not self.k8s_node.valid:
+            cli_logger.warning("Cannot accees K8s Cloud resouece. Intend to access K8s Cloud resource would result in error")
     
     @staticmethod
     def bootstrap_config(cluster_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -302,7 +305,7 @@ class NodeProvider:
         # LTK's note: node_config only contains the "node_cofig" filed of a specific node type
         current_conf = copy.deepcopy(node_config)
 
-        if current_conf["node_type"] == SLURM_NODE_TYPE_TAG:
+        if current_conf["node_type"] == LSF_NODE_TYPE_TAG:
             if "head_node" not in current_conf:
                 is_head_node = False
             else:
@@ -314,12 +317,12 @@ class NodeProvider:
             
                 redis_password = ''.join(random.choices(string.ascii_uppercase + string.digits, k=PASSWORD_LENGTH))
                 
-                self.slurm_node.create_head_node(
+                self.lsf_node.create_head_node(
                     current_conf, tags, redis_password,
                     self.gcs_port, self.ray_client_port, self.dashboard_port
                 )
             else:
-                self.slurm_node.create_worker_node(current_conf, tags, count)
+                self.lsf_node.create_worker_node(current_conf, tags, count)
 
         elif current_conf["node_type"] == K8S_NODE_TYPE_TAG:
             self.k8s_node.create_worker_node(current_conf, tags, count)
@@ -332,11 +335,6 @@ class NodeProvider:
             if "init_commands" in current_conf:
                 for init in current_conf["init_commands"]:
                     parsed_init_command += init + "\n"
-            
-            parsed_add_slurm_command = ""
-            if "additional_slurm_commands" in current_conf:
-                for cmd in current_conf["additional_slurm_commands"]:
-                    parsed_add_slurm_command += cmd + "\n"
 
             if "head_ip" in current_conf:
                 head_ip = current_conf["head_ip"]
@@ -378,7 +376,7 @@ class NodeProvider:
 
             meta_info = {}
             meta_info["head_ip"] = head_ip
-            meta_info["head_id"] = HEAD_NODE_ID_OUTSIDE_SLURM
+            meta_info["head_id"] = HEAD_NODE_ID_OUTSIDE_LSF
             meta_info["gcs_port"] = ray_ports[0]
             meta_info["client_port"] = ray_ports[1]
             meta_info["dashboard_port"] = ray_ports[2]
@@ -388,10 +386,10 @@ class NodeProvider:
                 with self.state.file_lock:
                     subprocess.run(["bash", "-l", self.temp_folder+"/head.sh"]) # TODO: check error
                     
-                    self.state.put_node(HEAD_NODE_ID_OUTSIDE_SLURM, node_info)
+                    self.state.put_node(HEAD_NODE_ID_OUTSIDE_LSF, node_info)
                     self.state.put_meta_info(meta_info) 
 
-            self._internal_ip_cache[head_ip] = HEAD_NODE_ID_OUTSIDE_SLURM 
+            self._internal_ip_cache[head_ip] = HEAD_NODE_ID_OUTSIDE_LSF 
 
             # Prepare the script for terminating node
             f = open(self.template_folder+"end_head.sh", "r")
@@ -449,7 +447,7 @@ class NodeProvider:
                 container that commands should be run on.
         """
 
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             common_args = {
                 "log_prefix": log_prefix,
                 "node_id": node_id,
@@ -458,7 +456,7 @@ class NodeProvider:
                 "cluster_name": cluster_name,
                 "process_runner": process_runner,
                 "use_internal_ip": use_internal_ip,
-                "under_slurm" : False,
+                "under_lsf" : False,
             }
 
             # if docker_config and docker_config["container_name"] != "":
@@ -468,8 +466,8 @@ class NodeProvider:
 
             return EmptyCommandRunner(**common_args)  
         
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            return self.slurm_node.get_command_runner(
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            return self.lsf_node.get_command_runner(
                 log_prefix,
                 node_id,
                 auth_config,
@@ -496,13 +494,13 @@ class NodeProvider:
         metadata.
         """
 
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             with self.state.lock:
                 with self.state.file_lock: 
                     subprocess.run(["bash", "-l", self.temp_folder+"/end_head.sh"]) # TODO: check error
                     self.state.delete_node(node_id)  
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            self.slurm_node.terminate_node(node_id)
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            self.lsf_node.terminate_node(node_id)
         elif node_id.startswith(K8S_NODE_PREFIX):
             self.k8s_node.terminate_node(node_id)
 
@@ -532,7 +530,7 @@ class NodeProvider:
         (e.g. is_running(node_id)). This means that non_terminate_nodes() must
         be called again to refresh results.
 
-        The node states on file will be updated by checking the slurm job status.
+        The node states on file will be updated by checking the LSF job status.
         Other node information on file remains unchanged
         """
         
@@ -540,7 +538,7 @@ class NodeProvider:
         workers = self.state.get_nodes()
         matching_ids = []
         for worker_id, info in workers.items():
-            if worker_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+            if worker_id == HEAD_NODE_ID_OUTSIDE_LSF:
                 if info["state"] == NODE_STATE_TERMINATED: 
                     continue
 
@@ -553,7 +551,7 @@ class NodeProvider:
                     matching_ids.append(worker_id)
         
         # Combine with the nodes from sub node providers
-        matching_ids.extend(self.slurm_node.non_terminated_nodes(tag_filters))
+        matching_ids.extend(self.lsf_node.non_terminated_nodes(tag_filters))
         matching_ids.extend(self.k8s_node.non_terminated_nodes(tag_filters))
 
         return matching_ids
@@ -561,26 +559,26 @@ class NodeProvider:
     def is_running(self, node_id: str) -> bool:
         """Return whether the specified node is running."""
 
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             return True # TODO:  
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            return self.slurm_node.is_running(node_id)
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            return self.lsf_node.is_running(node_id)
         elif node_id.startswith(K8S_NODE_PREFIX):
             return self.k8s_node.is_running(node_id)
 
     def is_terminated(self, node_id: str) -> bool:
         """Return whether the specified node is terminated."""
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             return False # TODO:
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            return self.slurm_node.is_terminated(node_id)
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            return self.lsf_node.is_terminated(node_id)
         elif node_id.startswith(K8S_NODE_PREFIX):
             return self.k8s_node.is_terminated(node_id)
     
     def set_node_tags(self, node_id: str, tags: Dict[str, str]) -> None:
         """Sets the tag values (string dict) for the specified node."""
         
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             with self.state.file_lock:
                 workers = self.state.get_nodes()
                 if node_id in workers:
@@ -589,36 +587,36 @@ class NodeProvider:
                     self.state.put_node(node_id, info)
                     return
             cli_logger.warning("Set tags is called non-exsiting node\n")
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            self.slurm_node.set_node_tags(node_id, tags)
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            self.lsf_node.set_node_tags(node_id, tags)
         elif node_id.startswith(K8S_NODE_PREFIX):
             self.k8s_node.set_node_tags(node_id, tags)
 
     def node_tags(self, node_id: str) -> Dict[str, str]:
         """Returns the tags of the given node (string dict)."""
 
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             workers = self.state.get_nodes()
             if node_id in workers:
                 return workers[node_id]["tags"]
             else:
                 cli_logger.warning("Get tags for non-existing node\n")
                 return {}
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            return self.slurm_node.node_tags(node_id)
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            return self.lsf_node.node_tags(node_id)
         elif node_id.startswith(K8S_NODE_PREFIX):
             return self.k8s_node.node_tags(node_id)
 
     def external_ip(self, node_id: str) -> Optional[str]:
         """Returns the external ip of the given node."""
-        raise NotImplementedError("Must use internal IPs with slurm")
+        raise NotImplementedError("Must use internal IPs with LSF")
 
     def internal_ip(self, node_id: str) -> Optional[str]:
         """Returns the internal ip (Ray ip) of the given node."""
-        if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
+        if node_id == HEAD_NODE_ID_OUTSIDE_LSF:
             return self.state.get_head_ip()
-        elif node_id.startswith(SLURM_NODE_PREFIX):
-            return self.slurm_node.internal_ip(node_id)
+        elif node_id.startswith(LSF_NODE_PREFIX):
+            return self.lsf_node.internal_ip(node_id)
         elif node_id.startswith(K8S_NODE_PREFIX):
             return self.k8s_node.internal_ip(node_id)
 
@@ -642,7 +640,7 @@ class NodeProvider:
         """
 
         if not use_internal_ip:
-            raise ValueError("Must use internal IPs with slurm")
+            raise ValueError("Must use internal IPs with LSF")
 
         def find_node_id():
             if use_internal_ip:

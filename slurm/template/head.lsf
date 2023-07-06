@@ -6,6 +6,7 @@
 #BSUB -W [_DEPLOY_LSF_JOB_TIME_]
 #BSUB -x                
 
+[_PY_ADD_LSF_CMD_]
 
 # Set variables
 port="[_PY_PORT_]"

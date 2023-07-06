@@ -1,5 +1,5 @@
 # A unique identifier for the head node and workers of this cluster.
-cluster_name: slurm-cluster
+cluster_name: lsf-cluster
 
 # The maximum number of workers nodes to launch in addition to the head
 # node.
@@ -35,7 +35,7 @@ available_node_types:
     resources: {"CPU": [_DEPLOY_HEAD_CPUS_], "GPU": [_DEPLOY_HEAD_GPUS_]} # will be used by autoscaler scheduler
     node_config:
       # head_node: 1 # needed by my create node. Do not modify 
-      # node_type: "SLURM"
+      # node_type: "LSF"
       node_type: "BARE"
 
       # This fields will be filled automatically if not specified
@@ -43,12 +43,12 @@ available_node_types:
 
       init_commands:
         - conda activate env_name # TODO:
-      additional_slurm_commands: 
+      additional_lsf_commands: 
         - "#SBATCH --reservation=username"
         - "#SBATCH --partition=cpu"
         # - "#SBATCH -w node1"
   
-  slurm_worker_node:
+  lsf_worker_node:
     # Minimum number of Ray workers of this type.
     min_workers: 0
     # Maximum number of Ray workers of this type. Takes precedence over min_workers.
@@ -57,10 +57,10 @@ available_node_types:
     resources: {"CPU": [_DEPLOY_WORKER_CPUS_], "GPU": [_DEPLOY_WORKER_GPUS_]} # will be used by autoscaler scheduler
     node_config: 
       head_node: 0 # needed by my create node. Do not modify 
-      node_type: "SLURM"
+      node_type: "LSF"
       init_commands:
         - conda activate env_name # TODO:
-      additional_slurm_commands: 
+      additional_lsf_commands: 
         - "#SBATCH --reservation=username"
         - "#SBATCH --partition=cpu"
   

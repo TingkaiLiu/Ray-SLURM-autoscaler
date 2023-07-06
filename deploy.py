@@ -1,5 +1,8 @@
 '''
-Created by Tingkai Liu on Aug 22, 2022
+Created by Tingkai Liu on Aug 22, 2022 
+
+LSF Version: July 5, 2023
+
 '''
 
 
@@ -11,7 +14,7 @@ import os
 # The absolute path of Ray library
 RAY_PATH = "/Users/<user_name>/opt/anaconda3/envs/<env_name>/lib/python3.9/site-packages/ray"
 
-# The compute node name to IP mapping
+# The compute node name to IP mapping.
 SLURM_IP_LOOKUP = """ {
     "compute1" : "192.168.1.1",
     "compute2" : "192.168.1.2",
@@ -33,7 +36,7 @@ if __name__ == "__main__":
     while RAY_PATH.endswith('/'):
         RAY_PATH = RAY_PATH[:-1]
 
-    RAY_SLURM_PATH = RAY_PATH + "/autoscaler/_private/slurm"
+    RAY_SLURM_PATH = RAY_PATH + "/autoscaler/_private/slurm" # Keep the path name even with LSF
     TEMPLATE_PATH = RAY_SLURM_PATH + "/template"
     
     if not os.path.exists(RAY_PATH):
@@ -41,7 +44,7 @@ if __name__ == "__main__":
         exit(0)
 
     if os.path.exists(RAY_SLURM_PATH):
-        ans = input("Ray-SLURM packages already exist. Overwrite? [y/n]: ")
+        ans = input("Ray-SLURM/LSF packages already exist. Overwrite? [y/n]: ")
         if ans != 'y':
             print("Exited")
             exit(0)
@@ -54,9 +57,9 @@ if __name__ == "__main__":
         "cp", 
         "slurm/empty_command_runner.py",
         "slurm/node_provider.py",
-        "slurm/slurm_commands.py",
+        "slurm/lsf_commands.py",
         "slurm/cluster_state.py",
-        "slurm/slurm_node.py",
+        "slurm/lsf_node.py",
         "slurm/cloud_k8s_node.py",
         RAY_SLURM_PATH
     ])

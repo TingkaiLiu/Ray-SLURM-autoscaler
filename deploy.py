@@ -88,20 +88,20 @@ if __name__ == "__main__":
     with open(TEMPLATE_PATH + "/head.sh", "w") as f:
         f.write(template)
     
-    with open("slurm/template/head.slurm", "r") as f:
+    with open("slurm/template/head.lsf", "r") as f:
         template = f.read()
     template = template.replace("[_DEPLOY_HEAD_CPUS_]", HEAD_NODE_CPUS)
     template = template.replace("[_DEPLOY_HEAD_GPUS_]", HEAD_NODE_GPUS)
-    template = template.replace("[_DEPLOY_SLURM_JOB_TIME_]", MAX_SLURM_JOB_TIME)
-    with open(TEMPLATE_PATH + "/head.slurm", "w") as f:
+    template = template.replace("[_DEPLOY_LSF_JOB_TIME_]", MAX_SLURM_JOB_TIME)
+    with open(TEMPLATE_PATH + "/head.lsf", "w") as f:
         f.write(template)
     
-    with open("slurm/template/worker.slurm", "r") as f:
+    with open("slurm/template/worker.lsf", "r") as f:
         template = f.read()
     template = template.replace("[_DEPLOY_WORKER_CPUS_]", WORKER_NODE_CPUS)
     template = template.replace("[_DEPLOY_WORKER_GPUS_]", WORKER_NODE_GPUS)
-    template = template.replace("[_DEPLOY_SLURM_JOB_TIME_]", MAX_SLURM_JOB_TIME)
-    with open(TEMPLATE_PATH + "/worker.slurm", "w") as f:
+    template = template.replace("[_DEPLOY_LSF_JOB_TIME_]", MAX_SLURM_JOB_TIME)
+    with open(TEMPLATE_PATH + "/worker.lsf", "w") as f:
         f.write(template)
 
     # Fill and generate autoscaler config

@@ -5,10 +5,10 @@ Created by Tingkai Liu (tingkai2@illinois.edu) on June 5, 2023
 
 '''
 
-import subprocess
+from lsf import lsb
 from ray.autoscaler._private.cli_logger import cli_logger
 from ray.autoscaler._private.slurm import (
-    LSF_IP_LOOKUP, 
+    LSF_IP_LOOKUP, # TODO:
     LSF_NODE_PREFIX
 )
 
@@ -23,12 +23,12 @@ def lsf_cancel_job(job_id: str) -> None:
         return
     job_id = job_id[len(LSF_NODE_PREFIX):]
 
-    lsf_command = ["bkill", job_id]
-
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError as e: # happens when job not exist
+        lsb.kill(job_id)
+    except lsb.LsbJobNotFoundException:
         cli_logger.warning("LSF interface: invalid job id")
+    except lsb.LsbException as e:
+        cli_logger.warning("LSF error while cancelling job", str(e))
     
 def lsf_launch_worker(
     template_folder: str, 
@@ -52,21 +52,16 @@ def lsf_launch_worker(
     template = template.replace("[_PY_INIT_COMMAND_]", init_commands)
     template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
-    # Only for debug purpose
-    f = open(temp_folder_name+"/worker.lsf", "w")
-    f.write(template)
-    f.close()
-
-    lsf_command = ["bsub", template]
+    # f = open(temp_folder_name+"/worker.lsf", "w")
+    # f.write(template)
+    # f.close()
 
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as e: # happens when job not exist
+        job_id = lsb.submit(template)
+        print("Job submitted with ID:", job_id)
+    except lsb.LsbSubmitException as e:
         cli_logger.error("LSF error when starting worker\n", str(e))
         raise ValueError("LSF error when starting worker")
-
-    comps = output.split() # Example output: 'Job <13486> is submitted to default queue <normal>.\n'
-    job_id = comps[1][1:-1] 
 
     return LSF_NODE_PREFIX + job_id
     
@@ -93,16 +88,12 @@ def lsf_launch_head(
     template = template.replace("[_PY_DASHBOARD_PORT_]", dashboard_port)
     template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
-    lsf_command = ["bsub", template]
-
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as e: # happens when job not exist
+        job_id = lsb.submit(template)
+        print("Job submitted with ID:", job_id)
+    except lsb.LsbSubmitException as e:
         cli_logger.error("LSF error when starting head\n", str(e))
         raise ValueError("LSF error when starting head")
-
-    comps = output.split() # Example output: 'Job <13486> is submitted to default queue <normal>.\n'
-    job_id = comps[1][1:-1] 
     
     return LSF_NODE_PREFIX + job_id
 
@@ -117,17 +108,14 @@ def lsf_get_job_ip(job_id: str) -> str:
         return None
     job_id = job_id[len(LSF_NODE_PREFIX):]
     
-    lsf_command = ["bjobs", "-W", job_id]
-
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as e: # happens when job not exist
+        job_info = lsb.openjobinfo(job_id)
+        execution_host = job_info['JOB_EXECUTION_HOSTS'][0]
+    except lsb.LsbJobNotFoundException:
         return None
 
-    hostname = output.splitlines()[1].split()[5]
-
-    if hostname in LSF_IP_LOOKUP:
-        return LSF_IP_LOOKUP[hostname]
+    if execution_host in LSF_IP_LOOKUP:
+        return LSF_IP_LOOKUP[execution_host]
     else:
         return None
 
@@ -140,14 +128,11 @@ def lsf_get_job_status(job_id: str) -> str:
         return LSF_JOB_NOT_EXIST
     job_id = job_id[len(LSF_NODE_PREFIX):]
 
-    lsf_command = ["bjobs", "-W", job_id]
-
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as e: # happens when job not exist
+        job_info = lsb.openjobinfo(job_id)
+        status = job_info['JOB_STATUS']
+    except lsb.LsbJobNotFoundException:
         return LSF_JOB_NOT_EXIST
-
-    status = output.splitlines()[1].split()[2]
 
     if status == "PEND":
         return LSF_JOB_PENDING

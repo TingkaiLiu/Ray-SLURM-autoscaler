@@ -1,12 +1,12 @@
 #!/bin/bash -l
 
-#BSUB -n [_DEPLOY_WORKER_CPUS_]   
-#BSUB -R "select[gpu=[_DEPLOY_WORKER_GPUS_]]"
-
-#BSUB -R "span[ptile=1]"  
-#BSUB -W [_DEPLOY_LSF_JOB_TIME_]     
-#BSUB -x            
-
+#BSUB -n 1
+#BSUB -R "span[hosts=1]" 
+#BSUB -R "affinity[core([_DEPLOY_WORKER_CPUS_])]" 
+#BSUB -M 20000
+#BSUB -W [_DEPLOY_LSF_JOB_TIME_]
+#BSUB -oo test-lsf.log
+#BSUB -eo test-lsf.err
 
 [_PY_ADD_LSF_CMD_]
 
@@ -19,7 +19,7 @@ password="[_PY_REDIS_PASSWORD_]"
 
 echo "Starting WORKER"
 ray start --address "$ip_head" \
-    --num-cpus "$LSB_DJOB_NUMPROC" --num-gpus "$LSB_DJOB_NUMGRES" \
+    --num-cpus "$OMP_NUM_THREADS" --num-gpus 0 \
     --redis-password="$password" --block &
 
 # __doc_worker_ray_end__

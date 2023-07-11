@@ -21,7 +21,7 @@ from ray.autoscaler._private.slurm.empty_command_runner import EmptyCommandRunne
 from ray.autoscaler._private.slurm.cluster_state import SlurmClusterState
 
 from ray.autoscaler._private.slurm.lsf_node import LSFNode
-from ray.autoscaler._private.slurm.cloud_k8s_node import K8sNode
+# from ray.autoscaler._private.slurm.cloud_k8s_node import K8sNode
 
 
 from ray.autoscaler._private.slurm import (
@@ -228,9 +228,10 @@ class NodeProvider:
         # Sub-node providers
         self.lsf_node = LSFNode(self.state, self.template_folder, self.temp_folder)
 
-        self.k8s_node = K8sNode(self.state, provider_config["k8s_namespace"], self.cluster_name, self.template_folder)
-        if not self.k8s_node.valid:
-            cli_logger.warning("Cannot accees K8s Cloud resouece. Intend to access K8s Cloud resource would result in error")
+        self.k8s_node = None
+        # self.k8s_node = K8sNode(self.state, provider_config["k8s_namespace"], self.cluster_name, self.template_folder)
+        # if not self.k8s_node.valid:
+        cli_logger.warning("Cannot accees K8s Cloud resouece. Intend to access K8s Cloud resource would result in error")
     
     @staticmethod
     def bootstrap_config(cluster_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -551,8 +552,15 @@ class NodeProvider:
                     matching_ids.append(worker_id)
         
         # Combine with the nodes from sub node providers
-        matching_ids.extend(self.lsf_node.non_terminated_nodes(tag_filters))
-        matching_ids.extend(self.k8s_node.non_terminated_nodes(tag_filters))
+        try:
+            matching_ids.extend(self.lsf_node.non_terminated_nodes(tag_filters))
+        except:
+            pass
+
+        try:
+            matching_ids.extend(self.k8s_node.non_terminated_nodes(tag_filters))
+        except:
+            pass
 
         return matching_ids
 

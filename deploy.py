@@ -20,7 +20,7 @@ SLURM_IP_LOOKUP = """ {
     "compute2" : "192.168.1.2",
 } """
 
-MAX_SLURM_JOB_TIME = "01:30:00"
+MAX_SLURM_JOB_TIME = "02:00"
 
 HEAD_NODE_CPUS = "1"
 HEAD_NODE_GPUS = "0"

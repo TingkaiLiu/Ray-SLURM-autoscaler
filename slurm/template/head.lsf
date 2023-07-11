@@ -1,10 +1,11 @@
 #!/bin/bash
 
-#BSUB -n [_DEPLOY_WORKER_CPUS_] 
-#BSUB -R "select[gpu=_DEPLOY_HEAD_GPUS_]" # Number of GPUs
-#BSUB -R "span[ptile=1]" 
+#BSUB -n 1
+#BSUB -R "span[hosts=1]" 
+#BSUB -R "affinity[core([_DEPLOY_HEAD_CPUS_])]" 
 #BSUB -W [_DEPLOY_LSF_JOB_TIME_]
-#BSUB -x                
+#BSUB -oo test-lsf.log
+#BSUB -eo test-lsf.err
 
 [_PY_ADD_LSF_CMD_]
 
@@ -15,14 +16,14 @@ dashboard_port="[_PY_DASHBOARD_PORT_]"
 password="[_PY_REDIS_PASSWORD_]"
 
 # Run your job commands
-head_node_ip=$(awk 'NR==1 {print $1}' $LSB_DJOB_HOSTFILE) # TODO: really?
+head_node_ip=$(awk 'NR==1 {print $1}' $LSB_DJOB_HOSTFILE)
 echo "IP Head: $head_node_ip:$port"
 
 [_PY_INIT_COMMAND_] # To be replaced by python launcher
 
 ray stop
 ray start --head --node-ip-address="$head_node_ip" --port=$port --dashboard-port=$dashboard_port \
-    --num-cpus "$LSB_DJOB_NUMPROC" --num-gpus "$LSB_DJOB_NUMGRES" \
+    --num-cpus "$OMP_NUM_THREADS" --num-gpus 0 \
     --ray-client-server-port "$ray_client_port" --autoscaling-config=~/ray_bootstrap_config.yaml \
     --redis-password="$password" --block &
 

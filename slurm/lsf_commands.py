@@ -52,18 +52,17 @@ def lsf_launch_worker(
     template = template.replace("[_PY_INIT_COMMAND_]", init_commands)
     template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
-    # Only for debug purpose
     f = open(temp_folder_name+"/worker.lsf", "w")
     f.write(template)
     f.close()
 
-    lsf_command = ["bsub", template]
+    lsf_command = "bsub < " + temp_folder_name + "/worker.lsf"
 
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT).decode()
+        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT, shell=True).decode()
     except subprocess.CalledProcessError as e: # happens when job not exist
-        cli_logger.error("LSF error when starting worker\n", str(e))
-        raise ValueError("LSF error when starting worker")
+        cli_logger.error("LSF error when starting worker: " + lsf_command, str(e))
+        raise ValueError("LSF error when starting worker: ")
 
     comps = output.split() # Example output: 'Job <13486> is submitted to default queue <normal>.\n'
     job_id = comps[1][1:-1] 
@@ -93,12 +92,16 @@ def lsf_launch_head(
     template = template.replace("[_PY_DASHBOARD_PORT_]", dashboard_port)
     template = template.replace("[_PY_REDIS_PASSWORD_]", redis_password)
 
-    lsf_command = ["bsub", template]
+    f = open(temp_folder_name+"/head.lsf", "w")
+    f.write(template)
+    f.close()
+
+    lsf_command = "bsub < " + temp_folder_name+"/head.lsf"
 
     try:
-        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT).decode()
+        output = subprocess.check_output(lsf_command, stderr=subprocess.STDOUT, shell=True).decode()
     except subprocess.CalledProcessError as e: # happens when job not exist
-        cli_logger.error("LSF error when starting head\n", str(e))
+        cli_logger.error("LSF error when starting head: " + lsf_command, str(e))
         raise ValueError("LSF error when starting head")
 
     comps = output.split() # Example output: 'Job <13486> is submitted to default queue <normal>.\n'

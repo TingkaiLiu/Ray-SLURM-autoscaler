@@ -849,13 +849,14 @@ class NodeProvider:
     
     def set_node_tags(self, node_id: str, tags: Dict[str, str]) -> None:
         """Sets the tag values (string dict) for the specified node."""
-        with self.state.file_lock:
-            workers = self.state.get_nodes()
-            if node_id in workers:
-                info = workers[node_id]
-                info["tags"].update(tags)
-                self.state.put_node(node_id, info)
-                return
+        with self.state.lock:
+            with self.state.file_lock:
+                workers = self.state.get_nodes()
+                if node_id in workers:
+                    info = workers[node_id]
+                    info["tags"].update(tags)
+                    self.state.put_node(node_id, info)
+                    return
             
         cli_logger.warning("Set tags is called non-exsiting node\n")
 

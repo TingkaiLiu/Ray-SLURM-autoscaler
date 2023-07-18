@@ -581,13 +581,14 @@ class NodeProvider:
         """Sets the tag values (string dict) for the specified node."""
         
         if node_id == HEAD_NODE_ID_OUTSIDE_SLURM:
-            with self.state.file_lock:
-                workers = self.state.get_nodes()
-                if node_id in workers:
-                    info = workers[node_id]
-                    info["tags"].update(tags)
-                    self.state.put_node(node_id, info)
-                    return
+            with self.state.lock:
+                with self.state.file_lock: 
+                    workers = self.state.get_nodes()
+                    if node_id in workers:
+                        info = workers[node_id]
+                        info["tags"].update(tags)
+                        self.state.put_node(node_id, info)
+                        return
             cli_logger.warning("Set tags is called non-exsiting node\n")
         elif node_id.startswith(SLURM_NODE_PREFIX):
             self.slurm_node.set_node_tags(node_id, tags)

@@ -688,12 +688,13 @@ class NodeProvider:
                         self.state.put_node(node_id, node_info)
 
 
-    def create_node_with_resources(
+    def create_node_with_resources_and_labels(
         self,
         node_config: Dict[str, Any],
         tags: Dict[str, str],
         count: int,
         resources: Dict[str, float],
+        labels: Dict[str, str], # TODO: Not handled yet
     ) -> Optional[Dict[str, Any]]:
         """Create nodes with a given resource config. 
 
@@ -927,3 +928,18 @@ class NodeProvider:
 
         return find_node_id()
         
+    def safe_to_scale(self) -> bool:
+        """Optional condition to determine if it's safe to proceed with an autoscaling
+        update. Can be used to wait for convergence of state managed by an external
+        cluster manager.
+
+        Called by the autoscaler immediately after non_terminated_nodes().
+        If False is returned, the autoscaler will abort the update.
+        """
+        return True
+
+    def post_process(self) -> None:
+        """This optional method is executed at the end of
+        StandardAutoscaler._update().
+        """
+        pass
